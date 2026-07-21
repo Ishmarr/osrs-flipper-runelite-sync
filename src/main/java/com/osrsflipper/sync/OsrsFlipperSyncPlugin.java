@@ -38,7 +38,7 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
-import net.runelite.api.widgets.WidgetID;
+import net.runelite.api.gameval.InterfaceID;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.HttpUrl;
@@ -322,10 +322,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     }
 
     @Subscribe
-    @SuppressWarnings("deprecation")
     public void onWidgetLoaded(WidgetLoaded event)
     {
-        if (event.getGroupId() == WidgetID.GRAND_EXCHANGE_GROUP_ID)
+        if (event.getGroupId() == InterfaceID.GE_OFFERS)
         {
             geOpenReconciliationPending = true;
             geOpenTicks = 0;
@@ -1993,11 +1992,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return compact.substring(0, 4) + "-" + compact.substring(4);
     }
 
-    private static String apiError(String body, String fallback)
+    private String apiError(String body, String fallback)
     {
         try
         {
-            ApiError error = new Gson().fromJson(body, ApiError.class);
+            ApiError error = gson.fromJson(body, ApiError.class);
             if (error != null && !isBlank(error.error))
             {
                 return trim(error.error);
