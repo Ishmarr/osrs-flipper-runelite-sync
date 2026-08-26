@@ -15,6 +15,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - toont de vijf hoogste verwachte scannerwinsten boven 100.000 GP en de vijf hoogste volledige-cycluswinsten per uur;
 - toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
 - haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
+- toont per periode welke items de gerealiseerde winst en het verlies hebben veroorzaakt;
 - toont de actuele verbindingsstatus;
 - bevat optionele uitgebreide diagnose­logging.
 
@@ -47,6 +48,8 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - adviesprijzen en actuele instaprijzen staan in smalle verticale kaarten die binnen de RuneLite-zijbalk blijven;
 - een koopslot bevriest het verkoopdoel dat gold toen de order werd gestart;
 - **Stats** heeft een keuze tussen vandaag, deze maand en totaal en gebruikt de canonieke websitegegevens;
+- gerealiseerde deelwinst verschijnt al tijdens een nog lopende verkoop, terwijl **Totaal flips** uitsluitend afgeronde flips telt;
+- de tabbladen, statistiekwaarden en itemopbrengsten gebruiken grotere, leesbare tekst;
 - kansen en statistieken verversen normaal maximaal eens per vijf minuten; de knop in **Kansen** forceert een actuele herberekening.
 
 ## Configuratie

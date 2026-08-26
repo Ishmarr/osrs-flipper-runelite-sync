@@ -4,6 +4,7 @@ import java.awt.Component;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import org.junit.Test;
@@ -37,5 +38,17 @@ public class PanelLayoutRegressionTest
 
         assertEquals(15f, label.getFont().getSize2D(), 0.001f);
         assertEquals(15f, value.getFont().getSize2D(), 0.001f);
+    }
+
+    @Test
+    public void tabsAndWebsiteStatisticsUseReadableFontSizes() throws Exception
+    {
+        Field tabSize = OsrsFlipperSyncPanel.class.getDeclaredField("TAB_FONT_SIZE");
+        Field detailSize = OsrsFlipperSyncPanel.class.getDeclaredField("DETAIL_FONT_SIZE");
+        tabSize.setAccessible(true);
+        detailSize.setAccessible(true);
+
+        assertEquals(13f, tabSize.getFloat(null), 0.001f);
+        assertEquals(15f, detailSize.getFloat(null), 0.001f);
     }
 }

@@ -44,6 +44,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color BLUE = new Color(102, 190, 235);
     private static final Color MUTED = new Color(170, 170, 170);
     private static final float DETAIL_FONT_SIZE = 15f;
+    private static final float TAB_FONT_SIZE = 13f;
     private static final int DETAIL_ROW_HEIGHT = 27;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
@@ -55,15 +56,16 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JPanel cards = new JPanel(cardLayout);
     private final JPanel slotsList = verticalPanel();
     private final JPanel opportunitiesList = verticalPanel();
+    private final JPanel statsItemsList = verticalPanel();
     private final Map<String, JButton> tabButtons = new LinkedHashMap<>();
     private final List<OfferCard> offerCards = new ArrayList<>();
     private final JLabel statusValue = wrapLabel("", 158);
     private final JLabel statsProfit = valueLabel("0 GP", GREEN, 15f);
-    private final JLabel statsRoi = valueLabel("0,00%", Color.WHITE, 11f);
-    private final JLabel statsHourly = valueLabel("0 GP/u", GREEN, 11f);
-    private final JLabel statsTax = valueLabel("0 GP", Color.WHITE, 11f);
-    private final JLabel statsVolume = valueLabel("0 GP", Color.WHITE, 11f);
-    private final JLabel statsFlips = valueLabel("0", Color.WHITE, 11f);
+    private final JLabel statsRoi = valueLabel("0,00%", Color.WHITE, DETAIL_FONT_SIZE);
+    private final JLabel statsHourly = valueLabel("0 GP/u", GREEN, DETAIL_FONT_SIZE);
+    private final JLabel statsTax = valueLabel("0 GP", Color.WHITE, DETAIL_FONT_SIZE);
+    private final JLabel statsVolume = valueLabel("0 GP", Color.WHITE, DETAIL_FONT_SIZE);
+    private final JLabel statsFlips = valueLabel("0", Color.WHITE, DETAIL_FONT_SIZE);
     private final JComboBox<PeriodChoice> statsPeriod = new JComboBox<>(PeriodChoice.values());
     private final Timer displayTimer;
 
@@ -172,7 +174,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         JButton button = new JButton(label);
         button.setFocusable(false);
-        button.setFont(button.getFont().deriveFont(10f));
+        button.setFont(button.getFont().deriveFont(TAB_FONT_SIZE));
         button.setMargin(new java.awt.Insets(5, 1, 5, 1));
         button.addActionListener(event -> selectTab(key));
         tabButtons.put(key, button);
@@ -222,6 +224,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         page.add(Box.createVerticalStrut(4));
 
         statsPeriod.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statsPeriod.setFont(statsPeriod.getFont().deriveFont(13f));
         statsPeriod.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         statsPeriod.addActionListener(event -> rebuildStats());
         page.add(statsPeriod);
@@ -233,11 +236,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         summary.add(metric("Gem. GP/u", statsHourly));
         summary.add(metric("GE-tax", statsTax));
         summary.add(metric("Volume", statsVolume));
-        summary.add(metric("Flips", statsFlips));
+        summary.add(metric("Totaal flips", statsFlips));
         page.add(summary);
 
+        JLabel itemsHeading = new JLabel("Opbrengst per item");
+        itemsHeading.setFont(itemsHeading.getFont().deriveFont(Font.BOLD, 14f));
+        itemsHeading.setForeground(GOLD);
+        itemsHeading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        itemsHeading.setBorder(new EmptyBorder(10, 0, 4, 0));
+        page.add(itemsHeading);
+        page.add(statsItemsList);
+
         JLabel hint = wrapLabel(
-            "<small>Gebaseerd op afgeronde flips in de website. Prijstests en eigen gebruik tellen niet mee.</small>",
+            "<small>Winst telt zodra items werkelijk verkocht zijn. Totaal flips telt alleen volledig afgeronde flips. Prijstests en eigen gebruik tellen niet mee.</small>",
             176);
         hint.setForeground(MUTED);
         hint.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -409,6 +420,45 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         statsTax.setText(formatGp(stats.geTax));
         statsVolume.setText(formatGp(stats.tradingVolume));
         statsFlips.setText(Integer.toString(stats.completedFlips));
+        rebuildStatsItems(stats.items);
+    }
+
+    private void rebuildStatsItems(List<RuneliteOverviewView.PeriodItem> items)
+    {
+        statsItemsList.removeAll();
+        if (items == null || items.isEmpty())
+        {
+            statsItemsList.add(emptyMessage("Nog geen gerealiseerde itemopbrengst in deze periode."));
+        }
+        else
+        {
+            for (RuneliteOverviewView.PeriodItem item : items)
+            {
+                JPanel card = cardPanel();
+                card.add(itemHeader(item.itemId, item.itemName));
+                JLabel profit = valueLabel(
+                    formatSignedGp(item.realizedProfit),
+                    item.realizedProfit < 0 ? RED : GREEN,
+                    DETAIL_FONT_SIZE);
+                profit.setAlignmentX(Component.LEFT_ALIGNMENT);
+                profit.setBorder(new EmptyBorder(3, 0, 1, 0));
+                card.add(profit);
+                if (item.completedFlips > 0)
+                {
+                    JLabel count = new JLabel(item.completedFlips + (item.completedFlips == 1
+                        ? " voltooide flip"
+                        : " voltooide flips"));
+                    count.setForeground(MUTED);
+                    count.setFont(count.getFont().deriveFont(12f));
+                    count.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    card.add(count);
+                }
+                statsItemsList.add(card);
+                statsItemsList.add(Box.createVerticalStrut(5));
+            }
+        }
+        statsItemsList.revalidate();
+        statsItemsList.repaint();
     }
 
     private JPanel itemHeader(int itemId, String itemName)

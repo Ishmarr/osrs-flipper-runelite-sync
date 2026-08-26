@@ -1,12 +1,15 @@
 package com.osrsflipper.sync;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 
 public class RuneliteOverviewViewTest
 {
@@ -42,6 +45,20 @@ public class RuneliteOverviewViewTest
         assertSame(month, view.statsFor("month"));
         assertSame(total, view.statsFor("total"));
         assertSame(today, view.statsFor("unknown"));
+    }
+
+    @Test
+    public void periodItemProfitsAreImmutableAndKeepLosses()
+    {
+        List<RuneliteOverviewView.PeriodItem> items = new ArrayList<>();
+        items.add(new RuneliteOverviewView.PeriodItem(573, "Air orb", -120_978, 1));
+        RuneliteOverviewView.PeriodStats stats = new RuneliteOverviewView.PeriodStats(
+            -120_978, -1, -10, 100, 1_000, 1, items);
+        items.clear();
+
+        assertEquals(1, stats.items.size());
+        assertEquals(-120_978, stats.items.get(0).realizedProfit);
+        assertThrows(UnsupportedOperationException.class, () -> stats.items.clear());
     }
 
     private static RuneliteOverviewView.Opportunity opportunity(int itemId, int buyPrice, int sellPrice)

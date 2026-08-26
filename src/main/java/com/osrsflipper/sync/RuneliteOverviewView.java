@@ -74,6 +74,13 @@ final class RuneliteOverviewView
             : source));
     }
 
+    private static List<PeriodItem> immutableItems(List<PeriodItem> source)
+    {
+        return Collections.unmodifiableList(new ArrayList<>(source == null
+            ? Collections.emptyList()
+            : source));
+    }
+
     static final class Opportunity
     {
         final int itemId;
@@ -129,6 +136,7 @@ final class RuneliteOverviewView
         final long geTax;
         final long tradingVolume;
         final int completedFlips;
+        final List<PeriodItem> items;
 
         PeriodStats(
             long realizedProfit,
@@ -138,17 +146,47 @@ final class RuneliteOverviewView
             long tradingVolume,
             int completedFlips)
         {
+            this(realizedProfit, roiPercent, profitPerHour, geTax, tradingVolume,
+                completedFlips, Collections.emptyList());
+        }
+
+        PeriodStats(
+            long realizedProfit,
+            double roiPercent,
+            long profitPerHour,
+            long geTax,
+            long tradingVolume,
+            int completedFlips,
+            List<PeriodItem> items)
+        {
             this.realizedProfit = realizedProfit;
             this.roiPercent = Double.isFinite(roiPercent) ? roiPercent : 0;
             this.profitPerHour = profitPerHour;
             this.geTax = Math.max(0, geTax);
             this.tradingVolume = Math.max(0, tradingVolume);
             this.completedFlips = Math.max(0, completedFlips);
+            this.items = immutableItems(items);
         }
 
         static PeriodStats empty()
         {
             return new PeriodStats(0, 0, 0, 0, 0, 0);
+        }
+    }
+
+    static final class PeriodItem
+    {
+        final int itemId;
+        final String itemName;
+        final long realizedProfit;
+        final int completedFlips;
+
+        PeriodItem(int itemId, String itemName, long realizedProfit, int completedFlips)
+        {
+            this.itemId = Math.max(0, itemId);
+            this.itemName = itemName == null ? "" : itemName;
+            this.realizedProfit = realizedProfit;
+            this.completedFlips = Math.max(0, completedFlips);
         }
     }
 }

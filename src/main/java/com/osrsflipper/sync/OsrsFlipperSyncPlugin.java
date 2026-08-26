@@ -2534,7 +2534,29 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     row.profit_per_hour,
                     row.ge_tax,
                     row.trading_volume,
-                    row.completed_flips);
+                    row.completed_flips,
+                    periodItemViews(row.items));
+        }
+
+        private static List<RuneliteOverviewView.PeriodItem> periodItemViews(List<PeriodItemData> rows)
+        {
+            if (rows == null || rows.isEmpty())
+            {
+                return Collections.emptyList();
+            }
+            List<RuneliteOverviewView.PeriodItem> result = new ArrayList<>();
+            for (PeriodItemData row : rows)
+            {
+                if (row != null && row.item_id > 0 && row.realized_profit != 0)
+                {
+                    result.add(new RuneliteOverviewView.PeriodItem(
+                        row.item_id,
+                        row.item_name,
+                        row.realized_profit,
+                        row.completed_flips));
+                }
+            }
+            return result;
         }
     }
 
@@ -2593,6 +2615,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long profit_per_hour;
         long ge_tax;
         long trading_volume;
+        int completed_flips;
+        List<PeriodItemData> items;
+    }
+
+    private static final class PeriodItemData
+    {
+        int item_id;
+        String item_name;
+        long realized_profit;
         int completed_flips;
     }
 
