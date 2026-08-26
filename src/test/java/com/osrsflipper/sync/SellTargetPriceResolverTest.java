@@ -14,18 +14,27 @@ public class SellTargetPriceResolverTest
     }
 
     @Test
-    public void prefersLiveInstantBuyOverScannerSnapshot()
+    public void freezesTheVisibleScannerInstantBuyAtOrderCreation()
     {
         MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
         RuneliteOverviewView.Opportunity opportunity = opportunity(1_900, 1_850);
-        assertEquals(1_829, SellTargetPriceResolver.provisional(market, opportunity));
+        assertEquals(1_850, SellTargetPriceResolver.provisional(market, opportunity));
+        assertEquals(false, SellTargetPriceResolver.needsFreshCapture(opportunity));
     }
 
     @Test
-    public void fallsBackToScannerInstantBuyAndNotScannerAdvicePrice()
+    public void usesScannerInstantBuyAndNotScannerAdvicePrice()
     {
         RuneliteOverviewView.Opportunity opportunity = opportunity(1_900, 1_850);
         assertEquals(1_850, SellTargetPriceResolver.provisional(null, opportunity));
+    }
+
+    @Test
+    public void requestsFreshPriceOnlyWhenNoScannerSnapshotExists()
+    {
+        MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
+        assertEquals(1_829, SellTargetPriceResolver.provisional(market, null));
+        assertEquals(true, SellTargetPriceResolver.needsFreshCapture(null));
     }
 
     @Test

@@ -500,8 +500,9 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         JLabel label = wrapLabel("<div style='text-align:center'>" + escapeHtml(text) + "</div>", 170);
         label.setForeground(MUTED);
         label.setHorizontalAlignment(SwingConstants.CENTER);
-        label.setAlignmentX(Component.CENTER_ALIGNMENT);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setBorder(new EmptyBorder(12, 4, 12, 4));
+        label.setMaximumSize(new Dimension(Integer.MAX_VALUE, label.getPreferredSize().height));
         return label;
     }
 
@@ -613,6 +614,16 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             panel.add(state);
             panel.add(compactMetric("Gevuld", formatNumber(offer.filledQuantity) + " / " + formatNumber(offer.totalQuantity)));
             panel.add(compactMetric("Offerprijs", priceOrDash(offer.price)));
+            if (offer.wikiInstantBuyPrice > 0)
+            {
+                JPanel wiki = compactMetric("Wiki instabuy", priceOrDash(offer.wikiInstantBuyPrice));
+                Component value = ((BorderLayout) wiki.getLayout()).getLayoutComponent(BorderLayout.EAST);
+                if (value != null)
+                {
+                    value.setForeground(GREEN);
+                }
+                panel.add(wiki);
+            }
             if ("buy".equals(offer.side) && offer.suggestedSellPrice > 0)
             {
                 JPanel target = compactMetric("Verkoopprijs", priceOrDash(offer.suggestedSellPrice));

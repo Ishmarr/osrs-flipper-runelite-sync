@@ -10,16 +10,26 @@ final class SellTargetPriceResolver
         MarketPriceView market,
         RuneliteOverviewView.Opportunity opportunity)
     {
-        int livePrice = captured(market);
-        if (livePrice > 0)
+        int scannerPrice = scannerSnapshot(opportunity);
+        if (scannerPrice > 0)
         {
-            return livePrice;
+            return scannerPrice;
         }
-        return opportunity == null ? 0 : Math.max(0, opportunity.instantBuy);
+        return captured(market);
+    }
+
+    static boolean needsFreshCapture(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return scannerSnapshot(opportunity) <= 0;
     }
 
     static int captured(MarketPriceView market)
     {
         return market == null ? 0 : Math.max(0, market.instantBuyPrice);
+    }
+
+    private static int scannerSnapshot(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return opportunity == null ? 0 : Math.max(0, opportunity.instantBuy);
     }
 }

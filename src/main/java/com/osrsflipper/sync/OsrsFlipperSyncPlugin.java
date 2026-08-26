@@ -90,10 +90,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final int HEARTBEAT_GAME_TICKS = 100;
     private static final int SERVER_STATE_GAME_TICKS = 200;
     private static final int FULL_SNAPSHOT_GAME_TICKS = 500;
-    private static final int MARKET_PRICE_GAME_TICKS = 500;
+    private static final int MARKET_PRICE_GAME_TICKS = 100;
     private static final int OVERVIEW_GAME_TICKS = 500;
     private static final int MAX_OUTBOX_SIZE = 500;
-    private static final long MARKET_PRICE_CACHE_SECONDS = 300L;
+    private static final long MARKET_PRICE_CACHE_SECONDS = 60L;
     private static final long RETRY_BASE_SECONDS = 5L;
     private static final long RETRY_MAX_SECONDS = 300L;
     private static final long NO_ACCOUNT = Long.MIN_VALUE;
@@ -967,7 +967,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if ("buy".equals(side))
             {
                 next.suggestedSellPrice = suggestedSellPriceFor(itemId);
-                next.suggestedSellPricePending = true;
+                next.suggestedSellPricePending = needsFreshSellPriceFor(itemId);
             }
             eventType = eventTypeFor(side, status, true, previous, next);
         }
@@ -1929,6 +1929,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 continue;
             }
+            MarketPriceView market = marketPrices.get(snapshot.itemId);
             offers.add(new FlipperOfferView(
                 snapshot.slotNumber,
                 snapshot.itemId,
@@ -1939,7 +1940,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 snapshot.filledQuantity,
                 snapshot.status,
                 snapshot.startedAt,
-                snapshot.suggestedSellPrice));
+                snapshot.suggestedSellPrice,
+                market == null ? 0 : market.instantBuyPrice));
         }
         offers.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
         panel.updateOffers(offers);
@@ -2044,6 +2046,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             overview.opportunityForItem(itemId));
     }
 
+    private boolean needsFreshSellPriceFor(int itemId)
+    {
+        return SellTargetPriceResolver.needsFreshCapture(overview.opportunityForItem(itemId));
+    }
+
     private void requestMarketPrices(boolean force)
     {
         for (SlotSnapshot snapshot : slotSnapshots.values())
@@ -2146,6 +2153,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         now());
                     marketPrices.put(itemId, market);
                     capturePendingSellPrices(itemId, market);
+                    refreshSidePanel();
                 }
             }
             catch (RuntimeException exception)
@@ -2188,7 +2196,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (changed)
         {
             persistCurrentAccount();
-            refreshSidePanel();
         }
     }
 
