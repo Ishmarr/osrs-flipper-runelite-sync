@@ -84,6 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final String OUTBOX_PREFIX = "outbox_";
     private static final String SNAPSHOT_SEQUENCE_PREFIX = "snapshotSequence_";
     private static final String PENDING_SNAPSHOT_PREFIX = "pendingSnapshot_";
+    private static final String LAST_TRADE_PRICES_PREFIX = "lastTradePrices_";
     private static final int SLOT_COUNT = 8;
     private static final int LOGIN_RECONCILE_TICKS = 8;
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
@@ -131,6 +132,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private final Deque<Integer> marketPriceQueue = new ArrayDeque<>();
     private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
     private final SessionStatsTracker sessionStats = new SessionStatsTracker();
+    private final LastTradePriceBook lastTradePrices = new LastTradePriceBook();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
 
     private long activeAccountHash = NO_ACCOUNT;
@@ -211,6 +213,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         sessionStats.reset();
+        lastTradePrices.clear();
         loginReconciliationPending = client.getGameState() == GameState.LOGGED_IN;
         geOpenReconciliationPending = false;
         loggedInTicks = 0;
@@ -1008,6 +1011,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
             next.spentAmount,
             next.status,
             next.price);
+        lastTradePrices.recordTransition(
+            next.itemId,
+            next.side,
+            previousFilled,
+            previousSpent,
+            next.filledQuantity,
+            next.spentAmount,
+            next.price,
+            next.lastEventAt);
 
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent(eventType));
@@ -1774,6 +1786,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         snapshotSequence = 0;
         activeAccountHash = accountHash;
         sessionStats.reset();
+        lastTradePrices.clear();
         marketPrices.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
@@ -1839,12 +1852,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 snapshotPending = true;
                 snapshotReason = isBlank(pendingSnapshot.reason) ? "retry" : pendingSnapshot.reason;
             }
+
+            String lastTradePricesJson = configManager.getConfiguration(
+                OsrsFlipperSyncConfig.GROUP, LAST_TRADE_PRICES_PREFIX + accountKey());
+            LastTradePriceBook.Entry[] lastTradeEntries = isBlank(lastTradePricesJson)
+                ? null
+                : gson.fromJson(lastTradePricesJson, LastTradePriceBook.Entry[].class);
+            lastTradePrices.restore(lastTradeEntries);
         }
         catch (RuntimeException exception)
         {
             LOG.error("Lokale GE-synchronisatiestatus kon niet worden gelezen", exception);
             slotSnapshots.clear();
             outbox.clear();
+            lastTradePrices.clear();
         }
     }
 
@@ -1873,6 +1894,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             OsrsFlipperSyncConfig.GROUP,
             PENDING_SNAPSHOT_PREFIX + accountKey(),
             pendingSnapshot == null ? "" : gson.toJson(pendingSnapshot));
+        configManager.setConfiguration(
+            OsrsFlipperSyncConfig.GROUP,
+            LAST_TRADE_PRICES_PREFIX + accountKey(),
+            gson.toJson(lastTradePrices.persistedEntries()));
     }
 
     private void clearStoredPairing(String status)
@@ -1946,6 +1971,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         offers.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
         panel.updateOffers(offers);
         panel.updateOverview(overview);
+        panel.updateLastTradePrices(lastTradePrices.snapshot());
     }
 
     private void resetSessionStats()

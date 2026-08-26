@@ -1,9 +1,11 @@
 package com.osrsflipper.sync;
 
 import java.awt.Component;
+import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.lang.reflect.Method;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -20,5 +22,20 @@ public class PanelLayoutRegressionTest
         assertEquals(Component.LEFT_ALIGNMENT, message.getAlignmentX(), 0.001f);
         Dimension maximum = message.getMaximumSize();
         assertEquals(Integer.MAX_VALUE, maximum.width);
+    }
+
+    @Test
+    public void detailLabelsAndValuesUseTheReadableProfitFontSize() throws Exception
+    {
+        Method factory = OsrsFlipperSyncPanel.class.getDeclaredMethod(
+            "compactMetric", String.class, String.class);
+        factory.setAccessible(true);
+        JPanel row = (JPanel) factory.invoke(null, "Aantal", "133 213");
+        BorderLayout layout = (BorderLayout) row.getLayout();
+        JLabel label = (JLabel) layout.getLayoutComponent(BorderLayout.WEST);
+        JLabel value = (JLabel) layout.getLayoutComponent(BorderLayout.EAST);
+
+        assertEquals(15f, label.getFont().getSize2D(), 0.001f);
+        assertEquals(15f, value.getFont().getSize2D(), 0.001f);
     }
 }

@@ -43,8 +43,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color RED = new Color(230, 126, 118);
     private static final Color BLUE = new Color(102, 190, 235);
     private static final Color MUTED = new Color(170, 170, 170);
-    private static final float DETAIL_FONT_SIZE = 12.5f;
-    private static final int DETAIL_ROW_HEIGHT = 23;
+    private static final float DETAIL_FONT_SIZE = 15f;
+    private static final int DETAIL_ROW_HEIGHT = 27;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
     private static final String STATS = "stats";
@@ -69,6 +69,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private List<FlipperOfferView> offers = Collections.emptyList();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
+    private Map<Integer, LastTradePriceView> lastTradePrices = Collections.emptyMap();
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
@@ -140,6 +141,18 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             overview = nextOverview == null ? RuneliteOverviewView.empty() : nextOverview;
             rebuildOpportunities();
             rebuildStats();
+        });
+    }
+
+    void updateLastTradePrices(Map<Integer, LastTradePriceView> nextPrices)
+    {
+        Map<Integer, LastTradePriceView> copy = new LinkedHashMap<>(nextPrices == null
+            ? Collections.emptyMap()
+            : nextPrices);
+        SwingUtilities.invokeLater(() ->
+        {
+            lastTradePrices = copy;
+            rebuildOpportunities();
         });
     }
 
@@ -367,6 +380,15 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         card.add(compactMetric("Verkoop", priceOrDash(opportunity.sellPrice)));
         card.add(compactMetric("Nu instabuy", priceOrDash(opportunity.instantBuy)));
         card.add(compactMetric("Nu instasell", priceOrDash(opportunity.instantSell)));
+        LastTradePriceView lastTrade = lastTradePrices.get(opportunity.itemId);
+        if (lastTrade != null && lastTrade.lastBuyPrice > 0)
+        {
+            card.add(compactMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice)));
+        }
+        if (lastTrade != null && lastTrade.lastSellPrice > 0)
+        {
+            card.add(compactMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice)));
+        }
         if (!expected)
         {
             card.add(compactMetric("Cycluswinst", formatGp(opportunity.maximumCycleProfit)));
