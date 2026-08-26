@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.0.3
+# OSRS Flipper Sync v5.1.0
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -10,6 +10,9 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - stuurt periodieke volledige snapshots en heartbeats;
 - vergelijkt de lokale toestand met de server en herstelt verschillen automatisch;
 - biedt een RuneLite-zijpaneel met **Apparaat koppelen**, **Opnieuw synchroniseren** en **Webapp openen**;
+- toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;
+- toont voor actieve items de actuele Wiki instant-buy- en instant-sellprijs rechtstreeks uit de officiële prijsfeed, zonder D1-reads;
+- houdt lokaal de winst, ROI, GE-tax, handelsvolume en winst per uur bij voor koop/verkoopfills die in de huidige RuneLite-sessie zijn gezien;
 - toont de actuele verbindingsstatus;
 - bevat optionele uitgebreide diagnose­logging.
 
@@ -33,6 +36,15 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 
 - de Gradle 9-build faalt niet meer wanneer `src/test` alleen de RuneLite-ontwikkelstarter bevat en geen JUnit-tests;
 - de lokale `build`-taak kan daardoor normaal afronden, terwijl de bestaande `run`-taak ongewijzigd blijft werken.
+
+## Nieuw in v5.1.0
+
+- het zijpaneel heeft afzonderlijke tabs voor **Slots**, **Prijzen**, **Stats** en **Sync**;
+- slotkaarten worden rechtstreeks uit RuneLite bijgewerkt en veroorzaken geen extra D1-reads;
+- marktprijzen komen maximaal eens per vijf minuten per actief item rechtstreeks uit de officiële Wiki-prijsfeed;
+- sessiewinst gebruikt alleen werkelijk waargenomen fillverschillen en koppelt verkopen FIFO aan aankopen van hetzelfde item;
+- verkopen waarvan de aankoop vóór het openen van de plugin lag, worden bewust niet als verzonnen winst meegerekend;
+- gedeeltelijke fills en herhaalde RuneLite-events worden niet dubbel geteld.
 
 ## Configuratie
 

@@ -17,24 +17,23 @@ def runeLiteVersion = 'latest.release'
 def pluginMainClass = 'com.osrsflipper.sync.OsrsFlipperSyncPluginTest'
 
 dependencies {
-    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+    compileOnly "net.runelite:client:${runeLiteVersion}"
 
     testImplementation 'junit:junit:4.13.2'
-    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
-    testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+    testImplementation "net.runelite:client:${runeLiteVersion}"
+    testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 
 group = 'com.osrsflipper'
-version = '5.0.3'
+version = '5.1.0'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release.set(11)
 }
 
-// src/test bevat de RuneLite-ontwikkelstarter met een main()-methode,
-// geen JUnit-testklasse. Gradle 9+ mag een lege test-run daarom niet
-// als buildfout behandelen.
+// src/test bevat naast JUnit-tests ook de RuneLite-ontwikkelstarter met
+// een main()-methode. Gradle 9+ mag die starter niet als test proberen te draaien.
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
     failOnNoDiscoveredTests.set(false)
 }

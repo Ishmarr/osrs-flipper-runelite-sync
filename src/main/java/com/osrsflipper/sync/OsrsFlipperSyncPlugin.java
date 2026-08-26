@@ -10,10 +10,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import javax.inject.Inject;
 import javax.swing.JOptionPane;
@@ -53,8 +55,8 @@ import org.slf4j.LoggerFactory;
 
 @PluginDescriptor(
     name = "OSRS Flipper Sync",
-    description = "Synchroniseert Grand Exchange-offers veilig met de OSRS Flip Tracker-webapp.",
-    tags = {"grand-exchange", "ge", "flip", "flipping", "sync"},
+    description = "Toont live GE-slots, prijzen en sessiestatistieken en synchroniseert veilig met de webapp.",
+    tags = {"grand-exchange", "ge", "flip", "flipping", "prices", "profit", "sync"},
     enabledByDefault = true
 )
 public class OsrsFlipperSyncPlugin extends Plugin
@@ -62,8 +64,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.0.3";
+    private static final String PLUGIN_VERSION = "5.1.0";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
+    private static final String WIKI_USER_AGENT = USER_AGENT +
+        " (https://github.com/Ishmarr/osrs-flipper-runelite-sync)";
+    private static final String WIKI_LATEST_URL = "https://prices.runescape.wiki/api/v1/osrs/latest";
 
     private static final String PAIR_PATH = "/runelite-api/pair";
     private static final String STATUS_PATH = "/runelite-api/status";
@@ -82,7 +87,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final int HEARTBEAT_GAME_TICKS = 100;
     private static final int SERVER_STATE_GAME_TICKS = 200;
     private static final int FULL_SNAPSHOT_GAME_TICKS = 500;
+    private static final int MARKET_PRICE_GAME_TICKS = 500;
     private static final int MAX_OUTBOX_SIZE = 500;
+    private static final long MARKET_PRICE_CACHE_SECONDS = 300L;
     private static final long RETRY_BASE_SECONDS = 5L;
     private static final long RETRY_MAX_SECONDS = 300L;
     private static final long NO_ACCOUNT = Long.MIN_VALUE;
@@ -116,6 +123,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private final Map<Integer, SlotSnapshot> slotSnapshots = new HashMap<>();
     private final Deque<QueuedEvent> outbox = new ArrayDeque<>();
+    private final Map<Integer, MarketPriceView> marketPrices = new HashMap<>();
+    private final Deque<Integer> marketPriceQueue = new ArrayDeque<>();
+    private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
+    private final SessionStatsTracker sessionStats = new SessionStatsTracker();
 
     private long activeAccountHash = NO_ACCOUNT;
     private boolean started;
@@ -137,6 +148,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int heartbeatTicks;
     private int serverStateTicks;
     private int fullSnapshotTicks;
+    private int marketPriceTicks;
     private long snapshotSequence;
     private int statusRetryAttempts;
     private long statusNextAttemptAt;
@@ -147,6 +159,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private long workerBackoffUntil;
     private String snapshotReason;
     private PendingSnapshot pendingSnapshot;
+    private boolean marketPriceInFlight;
 
     @Provides
     OsrsFlipperSyncConfig provideConfig(ConfigManager manager)
@@ -179,9 +192,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         heartbeatTicks = HEARTBEAT_GAME_TICKS;
         serverStateTicks = SERVER_STATE_GAME_TICKS;
         fullSnapshotTicks = 0;
+        marketPriceTicks = MARKET_PRICE_GAME_TICKS;
+        marketPriceInFlight = false;
         snapshotSequence = 0;
         snapshotReason = "startup";
         pendingSnapshot = null;
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
+        sessionStats.reset();
         loginReconciliationPending = client.getGameState() == GameState.LOGGED_IN;
         geOpenReconciliationPending = false;
         loggedInTicks = 0;
@@ -202,6 +221,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             clientToolbar.removeNavigation(navButton);
             navButton = null;
+        }
+        if (panel != null)
+        {
+            panel.dispose();
         }
         panel = null;
 
@@ -227,6 +250,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerBackoffUntil = 0;
         slotSnapshots.clear();
         outbox.clear();
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
+        marketPriceInFlight = false;
         activeAccountHash = NO_ACCOUNT;
         LOG.info("OSRS Flipper Sync gestopt");
     }
@@ -317,8 +344,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
             reconcileAllSlots("periodic");
         }
 
+        marketPriceTicks++;
+        if (marketPriceTicks >= MARKET_PRICE_GAME_TICKS)
+        {
+            marketPriceTicks = 0;
+            requestMarketPrices(false);
+        }
+
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
+        flushMarketPriceQueue();
     }
 
     @Subscribe
@@ -387,10 +422,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void createSidePanel()
     {
         panel = new OsrsFlipperSyncPanel(
+            itemManager,
             this::beginInteractivePairing,
             this::requestManualResync,
-            this::openWebapp);
+            this::openWebapp,
+            () -> clientThread.invokeLater(() -> requestMarketPrices(true)),
+            () -> clientThread.invokeLater(this::resetSessionStats));
         panel.setConnectionStatus(config.connectionStatus());
+        refreshSidePanel();
 
         BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
         navButton = NavigationButton.builder()
@@ -809,6 +848,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 processOffer(slot, offer, true);
             }
         }
+        refreshSidePanel();
+        requestMarketPrices(false);
         queueFullSnapshot(reason);
         persistCurrentAccount();
         flushOutboxIfPossible();
@@ -925,9 +966,26 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         next.fingerprint = fingerprint;
 
+        int previousFilled = sameOffer && previous != null ? previous.filledQuantity : 0;
+        int previousSpent = sameOffer && previous != null ? previous.spentAmount : 0;
+        String previousStatus = sameOffer && previous != null ? previous.status : null;
+        sessionStats.recordTransition(
+            next.itemId,
+            next.itemName,
+            next.side,
+            previousFilled,
+            previousSpent,
+            previousStatus,
+            next.filledQuantity,
+            next.spentAmount,
+            next.status,
+            next.price);
+
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent(eventType));
         persistCurrentAccount();
+        refreshSidePanel();
+        queueMarketPrice(next.itemId, false);
 
         debug("GE-slot {}: {} {} {}/{} @ {} ({}){}",
             slotNumber,
@@ -960,6 +1018,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent("slot_emptied"));
         persistCurrentAccount();
+        refreshSidePanel();
         debug("GE-slot {} leeggemaakt{}", slotNumber, reconciliation ? " [reconciliatie]" : "");
     }
 
@@ -1686,11 +1745,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
         pendingSnapshot = null;
         snapshotSequence = 0;
         activeAccountHash = accountHash;
+        sessionStats.reset();
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
         loadCurrentAccount();
         requestInFlight = false;
         snapshotPending = true;
         snapshotReason = "account_switch";
         serverStateCheckPending = true;
+        refreshSidePanel();
+        requestMarketPrices(false);
         debug("Accountstatus geladen voor hash {}", accountKey());
     }
 
@@ -1817,6 +1882,161 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void setStoredValue(String key, String value)
     {
         configManager.setConfiguration(OsrsFlipperSyncConfig.GROUP, key, value == null ? "" : value);
+    }
+
+    private void refreshSidePanel()
+    {
+        if (panel == null)
+        {
+            return;
+        }
+
+        List<FlipperOfferView> offers = new ArrayList<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || "empty".equals(snapshot.status) || snapshot.itemId <= 0)
+            {
+                continue;
+            }
+            offers.add(new FlipperOfferView(
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.itemName,
+                snapshot.side,
+                snapshot.price,
+                snapshot.totalQuantity,
+                snapshot.filledQuantity,
+                snapshot.status,
+                snapshot.startedAt));
+        }
+        offers.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
+        panel.updateOffers(offers);
+        panel.updateMarketPrices(marketPrices);
+        panel.updateSessionStats(sessionStats.snapshot());
+    }
+
+    private void resetSessionStats()
+    {
+        sessionStats.reset();
+        refreshSidePanel();
+    }
+
+    private void requestMarketPrices(boolean force)
+    {
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot != null && !"empty".equals(snapshot.status) && snapshot.itemId > 0)
+            {
+                queueMarketPrice(snapshot.itemId, force);
+            }
+        }
+        flushMarketPriceQueue();
+    }
+
+    private void queueMarketPrice(int itemId, boolean force)
+    {
+        if (itemId <= 0)
+        {
+            return;
+        }
+        MarketPriceView cached = marketPrices.get(itemId);
+        if (!force && cached != null && cached.fetchedAt + MARKET_PRICE_CACHE_SECONDS > now())
+        {
+            return;
+        }
+        if (queuedMarketPriceItems.add(itemId))
+        {
+            marketPriceQueue.addLast(itemId);
+        }
+    }
+
+    private void flushMarketPriceQueue()
+    {
+        if (!started || marketPriceInFlight)
+        {
+            return;
+        }
+        Integer itemId = marketPriceQueue.pollFirst();
+        if (itemId == null)
+        {
+            return;
+        }
+        queuedMarketPriceItems.remove(itemId);
+
+        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
+        if (base == null)
+        {
+            return;
+        }
+        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
+        Request request = new Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", WIKI_USER_AGENT)
+            .build();
+
+        marketPriceInFlight = true;
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            public void onFailure(Call call, IOException exception)
+            {
+                clientThread.invokeLater(() ->
+                {
+                    marketPriceInFlight = false;
+                    debug("Actuele Wiki-prijs voor item {} kon niet worden opgehaald: {}", itemId, exception.getMessage());
+                    flushMarketPriceQueue();
+                });
+            }
+
+            @Override
+            public void onResponse(Call call, Response response)
+            {
+                String body = readResponseBody(response);
+                int statusCode = response.code();
+                response.close();
+                clientThread.invokeLater(() -> handleMarketPriceResponse(itemId, statusCode, body));
+            }
+        });
+    }
+
+    private void handleMarketPriceResponse(int itemId, int statusCode, String body)
+    {
+        marketPriceInFlight = false;
+        if (statusCode >= 200 && statusCode < 300)
+        {
+            try
+            {
+                LatestPriceResponse response = gson.fromJson(body, LatestPriceResponse.class);
+                LatestPriceData row = response == null || response.data == null
+                    ? null
+                    : response.data.get(Integer.toString(itemId));
+                if (row != null)
+                {
+                    marketPrices.put(itemId, new MarketPriceView(
+                        itemId,
+                        row.high,
+                        row.low,
+                        row.highTime,
+                        row.lowTime,
+                        now()));
+                    if (panel != null)
+                    {
+                        panel.updateMarketPrices(marketPrices);
+                    }
+                }
+            }
+            catch (RuntimeException exception)
+            {
+                debug("Actuele Wiki-prijs voor item {} kon niet worden gelezen: {}", itemId, exception.getMessage());
+            }
+        }
+        else
+        {
+            debug("Actuele Wiki-prijs voor item {} kreeg HTTP {}", itemId, statusCode);
+        }
+        flushMarketPriceQueue();
     }
 
     private boolean hasDeviceToken()
@@ -2077,6 +2297,19 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final class ApiError
     {
         String error;
+    }
+
+    private static final class LatestPriceResponse
+    {
+        Map<String, LatestPriceData> data;
+    }
+
+    private static final class LatestPriceData
+    {
+        int high;
+        int low;
+        long highTime;
+        long lowTime;
     }
 
     private static final class SlotSnapshot
