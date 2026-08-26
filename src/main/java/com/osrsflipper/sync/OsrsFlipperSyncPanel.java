@@ -615,7 +615,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             panel.add(compactMetric("Offerprijs", priceOrDash(offer.price)));
             if ("buy".equals(offer.side) && offer.suggestedSellPrice > 0)
             {
-                JPanel target = compactMetric("Verkoopdoel", priceOrDash(offer.suggestedSellPrice));
+                JPanel target = compactMetric("Verkoopprijs", priceOrDash(offer.suggestedSellPrice));
                 Component value = ((BorderLayout) target.getLayout()).getLayoutComponent(BorderLayout.EAST);
                 if (value != null)
                 {

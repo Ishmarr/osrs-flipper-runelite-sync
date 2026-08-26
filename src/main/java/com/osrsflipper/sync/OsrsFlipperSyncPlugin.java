@@ -967,6 +967,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if ("buy".equals(side))
             {
                 next.suggestedSellPrice = suggestedSellPriceFor(itemId);
+                next.suggestedSellPricePending = true;
             }
             eventType = eventTypeFor(side, status, true, previous, next);
         }
@@ -1012,7 +1013,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         enqueue(next.toSyncEvent(eventType));
         persistCurrentAccount();
         refreshSidePanel();
-        queueMarketPrice(next.itemId, false);
+        queueMarketPrice(next.itemId, next.suggestedSellPricePending);
 
         debug("GE-slot {}: {} {} {}/{} @ {} ({}){}",
             slotNumber,
@@ -2038,13 +2039,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private int suggestedSellPriceFor(int itemId)
     {
-        RuneliteOverviewView.Opportunity opportunity = overview.opportunityForItem(itemId);
-        if (opportunity != null && opportunity.sellPrice > 0)
-        {
-            return opportunity.sellPrice;
-        }
-        MarketPriceView market = marketPrices.get(itemId);
-        return market == null ? 0 : Math.max(0, market.instantBuyPrice - 1);
+        return SellTargetPriceResolver.provisional(
+            marketPrices.get(itemId),
+            overview.opportunityForItem(itemId));
     }
 
     private void requestMarketPrices(boolean force)
@@ -2053,7 +2050,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             if (snapshot != null && !"empty".equals(snapshot.status) && snapshot.itemId > 0)
             {
-                queueMarketPrice(snapshot.itemId, force);
+                queueMarketPrice(snapshot.itemId, force || snapshot.suggestedSellPricePending);
             }
         }
         flushMarketPriceQueue();
@@ -2140,13 +2137,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     : response.data.get(Integer.toString(itemId));
                 if (row != null)
                 {
-                    marketPrices.put(itemId, new MarketPriceView(
+                    MarketPriceView market = new MarketPriceView(
                         itemId,
                         row.high,
                         row.low,
                         row.highTime,
                         row.lowTime,
-                        now()));
+                        now());
+                    marketPrices.put(itemId, market);
+                    capturePendingSellPrices(itemId, market);
                 }
             }
             catch (RuntimeException exception)
@@ -2159,6 +2158,38 @@ public class OsrsFlipperSyncPlugin extends Plugin
             debug("Actuele Wiki-prijs voor item {} kreeg HTTP {}", itemId, statusCode);
         }
         flushMarketPriceQueue();
+    }
+
+    private void capturePendingSellPrices(int itemId, MarketPriceView market)
+    {
+        int capturedPrice = SellTargetPriceResolver.captured(market);
+        if (capturedPrice <= 0)
+        {
+            return;
+        }
+
+        boolean changed = false;
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || snapshot.itemId != itemId ||
+                !"buy".equals(snapshot.side) || "empty".equals(snapshot.status) ||
+                !snapshot.suggestedSellPricePending)
+            {
+                continue;
+            }
+            snapshot.suggestedSellPrice = capturedPrice;
+            snapshot.suggestedSellPricePending = false;
+            snapshot.suggestedSellPriceCapturedAt = market.instantBuyAt > 0
+                ? market.instantBuyAt
+                : market.fetchedAt;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            persistCurrentAccount();
+            refreshSidePanel();
+        }
     }
 
     private boolean hasDeviceToken()
@@ -2564,6 +2595,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long serverVersion;
         String fingerprint;
         int suggestedSellPrice;
+        boolean suggestedSellPricePending;
+        long suggestedSellPriceCapturedAt;
 
         SlotSnapshot copy()
         {
@@ -2585,6 +2618,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             copy.serverVersion = serverVersion;
             copy.fingerprint = fingerprint;
             copy.suggestedSellPrice = suggestedSellPrice;
+            copy.suggestedSellPricePending = suggestedSellPricePending;
+            copy.suggestedSellPriceCapturedAt = suggestedSellPriceCapturedAt;
             return copy;
         }
 
