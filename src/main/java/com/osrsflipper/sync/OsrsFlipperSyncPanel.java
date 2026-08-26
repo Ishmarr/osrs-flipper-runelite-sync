@@ -5,7 +5,6 @@ import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.time.Instant;
@@ -20,6 +19,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
@@ -39,9 +39,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color GOLD = new Color(226, 182, 99);
     private static final Color GREEN = new Color(95, 211, 133);
     private static final Color RED = new Color(230, 126, 118);
+    private static final Color BLUE = new Color(102, 190, 235);
     private static final Color MUTED = new Color(170, 170, 170);
     private static final String SLOTS = "slots";
-    private static final String PRICES = "prices";
+    private static final String OPPORTUNITIES = "opportunities";
     private static final String STATS = "stats";
     private static final String SYNC = "sync";
 
@@ -49,50 +50,47 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel cards = new JPanel(cardLayout);
     private final JPanel slotsList = verticalPanel();
-    private final JPanel pricesList = verticalPanel();
-    private final JPanel statsItems = verticalPanel();
+    private final JPanel opportunitiesList = verticalPanel();
     private final Map<String, JButton> tabButtons = new LinkedHashMap<>();
     private final List<OfferCard> offerCards = new ArrayList<>();
-    private final JLabel statusValue = new JLabel();
-    private final JLabel profitValue = valueLabel("0 GP", GREEN, 22f);
-    private final JLabel roiValue = valueLabel("0,00%", Color.WHITE, 12f);
-    private final JLabel taxValue = valueLabel("0 GP", Color.WHITE, 12f);
-    private final JLabel volumeValue = valueLabel("0 GP", Color.WHITE, 12f);
-    private final JLabel flipsValue = valueLabel("0", Color.WHITE, 12f);
-    private final JLabel sessionValue = valueLabel("00:00:00", Color.WHITE, 12f);
-    private final JLabel hourlyValue = valueLabel("0 GP/u", GREEN, 12f);
+    private final JLabel statusValue = wrapLabel("", 158);
+    private final JLabel statsProfit = valueLabel("0 GP", GREEN, 15f);
+    private final JLabel statsRoi = valueLabel("0,00%", Color.WHITE, 11f);
+    private final JLabel statsHourly = valueLabel("0 GP/u", GREEN, 11f);
+    private final JLabel statsTax = valueLabel("0 GP", Color.WHITE, 11f);
+    private final JLabel statsVolume = valueLabel("0 GP", Color.WHITE, 11f);
+    private final JLabel statsFlips = valueLabel("0", Color.WHITE, 11f);
+    private final JComboBox<PeriodChoice> statsPeriod = new JComboBox<>(PeriodChoice.values());
     private final Timer displayTimer;
 
     private List<FlipperOfferView> offers = Collections.emptyList();
-    private Map<Integer, MarketPriceView> marketPrices = Collections.emptyMap();
-    private SessionStatsTracker.SessionStatsSnapshot stats;
+    private RuneliteOverviewView overview = RuneliteOverviewView.empty();
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
         Runnable pairAction,
         Runnable syncAction,
         Runnable webappAction,
-        Runnable refreshPricesAction,
-        Runnable resetStatsAction)
+        Runnable refreshOverviewAction)
     {
         this.itemManager = itemManager;
-        setLayout(new BorderLayout(0, 8));
-        setBorder(new EmptyBorder(8, 8, 8, 8));
+        setLayout(new BorderLayout(0, 7));
+        setBorder(new EmptyBorder(7, 6, 7, 6));
 
         JPanel header = verticalPanel();
         JLabel title = new JLabel("OSRS Flip Tracker");
-        title.setFont(FontManager.getRunescapeBoldFont().deriveFont(18f));
+        title.setFont(FontManager.getRunescapeBoldFont().deriveFont(17f));
         title.setForeground(GOLD);
         title.setAlignmentX(Component.LEFT_ALIGNMENT);
         header.add(title);
-        header.add(Box.createVerticalStrut(6));
+        header.add(Box.createVerticalStrut(5));
         header.add(createTabs());
         add(header, BorderLayout.NORTH);
 
         cards.setOpaque(false);
         cards.add(scroll(slotsList), SLOTS);
-        cards.add(scroll(createPricesPage(refreshPricesAction)), PRICES);
-        cards.add(scroll(createStatsPage(resetStatsAction)), STATS);
+        cards.add(scroll(createOpportunitiesPage(refreshOverviewAction)), OPPORTUNITIES);
+        cards.add(scroll(createStatsPage()), STATS);
         cards.add(scroll(createSyncPage(pairAction, syncAction, webappAction)), SYNC);
         add(cards, BorderLayout.CENTER);
 
@@ -102,7 +100,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
         setConnectionStatus("Nog niet gekoppeld");
         rebuildSlots();
-        rebuildPrices();
+        rebuildOpportunities();
+        rebuildStats();
         selectTab(SLOTS);
     }
 
@@ -113,8 +112,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     void setConnectionStatus(String status)
     {
-        String safeStatus = escapeHtml(status == null ? "Onbekende status" : status);
-        SwingUtilities.invokeLater(() -> statusValue.setText("<html>" + safeStatus + "</html>"));
+        SwingUtilities.invokeLater(() -> statusValue.setText(html(
+            escapeHtml(status == null ? "Onbekende status" : status), 158)));
     }
 
     void updateOffers(List<FlipperOfferView> nextOffers)
@@ -127,38 +126,26 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             offers = copy;
             rebuildSlots();
-            rebuildPrices();
         });
     }
 
-    void updateMarketPrices(Map<Integer, MarketPriceView> nextPrices)
-    {
-        Map<Integer, MarketPriceView> copy = new LinkedHashMap<>(nextPrices == null
-            ? Collections.emptyMap()
-            : nextPrices);
-        SwingUtilities.invokeLater(() ->
-        {
-            marketPrices = copy;
-            rebuildPrices();
-        });
-    }
-
-    void updateSessionStats(SessionStatsTracker.SessionStatsSnapshot nextStats)
+    void updateOverview(RuneliteOverviewView nextOverview)
     {
         SwingUtilities.invokeLater(() ->
         {
-            stats = nextStats;
+            overview = nextOverview == null ? RuneliteOverviewView.empty() : nextOverview;
+            rebuildOpportunities();
             rebuildStats();
         });
     }
 
     private JPanel createTabs()
     {
-        JPanel tabs = new JPanel(new GridLayout(1, 4, 3, 0));
+        JPanel tabs = new JPanel(new GridLayout(1, 4, 2, 0));
         tabs.setOpaque(false);
         tabs.setAlignmentX(Component.LEFT_ALIGNMENT);
         addTab(tabs, "Slots", SLOTS);
-        addTab(tabs, "Prijzen", PRICES);
+        addTab(tabs, "Kansen", OPPORTUNITIES);
         addTab(tabs, "Stats", STATS);
         addTab(tabs, "Sync", SYNC);
         return tabs;
@@ -168,7 +155,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         JButton button = new JButton(label);
         button.setFocusable(false);
-        button.setMargin(new java.awt.Insets(5, 2, 5, 2));
+        button.setFont(button.getFont().deriveFont(10f));
+        button.setMargin(new java.awt.Insets(5, 1, 5, 1));
         button.addActionListener(event -> selectTab(key));
         tabButtons.put(key, button);
         tabs.add(button);
@@ -187,91 +175,86 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
     }
 
-    private JPanel createPricesPage(Runnable refreshPricesAction)
+    private JPanel createOpportunitiesPage(Runnable refreshAction)
     {
         JPanel page = verticalPanel();
-        JPanel heading = new JPanel(new BorderLayout(5, 0));
+        JPanel heading = new JPanel(new BorderLayout(4, 0));
         heading.setOpaque(false);
         heading.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JLabel explanation = new JLabel("<html><b>Actieve items</b><br><small>Officiële Wiki-prijzen, zonder D1-reads</small></html>");
-        heading.add(explanation, BorderLayout.CENTER);
-        JButton refresh = new JButton("Vernieuw");
-        refresh.addActionListener(event -> refreshPricesAction.run());
+        JLabel text = wrapLabel("<b>Beste flips</b><br><small>Zelfde model als de webscanner</small>", 150);
+        heading.add(text, BorderLayout.CENTER);
+        JButton refresh = new JButton("↻");
+        refresh.setToolTipText("Kansen en statistieken vernieuwen");
+        refresh.setPreferredSize(new Dimension(34, 28));
+        refresh.addActionListener(event -> refreshAction.run());
         heading.add(refresh, BorderLayout.EAST);
         page.add(heading);
         page.add(Box.createVerticalStrut(6));
-        page.add(pricesList);
+        page.add(opportunitiesList);
         return page;
     }
 
-    private JPanel createStatsPage(Runnable resetStatsAction)
+    private JPanel createStatsPage()
     {
         JPanel page = verticalPanel();
-        JLabel heading = new JLabel("Deze RuneLite-sessie");
+        JLabel heading = new JLabel("Website-statistieken");
         heading.setFont(heading.getFont().deriveFont(Font.BOLD, 14f));
         heading.setForeground(GOLD);
         heading.setAlignmentX(Component.LEFT_ALIGNMENT);
         page.add(heading);
+        page.add(Box.createVerticalStrut(4));
 
-        JLabel hint = new JLabel("<html><small>Winst telt alleen verkopen die gekoppeld kunnen worden aan aankopen die deze sessie zijn gezien.</small></html>");
-        hint.setForeground(MUTED);
-        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
-        hint.setBorder(new EmptyBorder(2, 0, 6, 0));
-        page.add(hint);
+        statsPeriod.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statsPeriod.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        statsPeriod.addActionListener(event -> rebuildStats());
+        page.add(statsPeriod);
+        page.add(Box.createVerticalStrut(7));
 
         JPanel summary = cardPanel();
-        profitValue.setHorizontalAlignment(SwingConstants.CENTER);
-        summary.add(metric("Gerealiseerde winst", profitValue));
-        summary.add(metric("ROI", roiValue));
-        summary.add(metric("Winst per uur", hourlyValue));
-        summary.add(metric("GE-tax", taxValue));
-        summary.add(metric("Handelsvolume", volumeValue));
-        summary.add(metric("Voltooide offers", flipsValue));
-        summary.add(metric("Sessietijd", sessionValue));
+        summary.add(metric("Winst", statsProfit));
+        summary.add(metric("ROI", statsRoi));
+        summary.add(metric("Gem. GP/u", statsHourly));
+        summary.add(metric("GE-tax", statsTax));
+        summary.add(metric("Volume", statsVolume));
+        summary.add(metric("Flips", statsFlips));
         page.add(summary);
-        page.add(Box.createVerticalStrut(7));
 
-        JLabel itemTitle = new JLabel("Items met gerealiseerde winst");
-        itemTitle.setFont(itemTitle.getFont().deriveFont(Font.BOLD));
-        itemTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        page.add(itemTitle);
-        page.add(Box.createVerticalStrut(4));
-        page.add(statsItems);
-        page.add(Box.createVerticalStrut(7));
-
-        JButton reset = new JButton("Sessiestatistieken resetten");
-        reset.setAlignmentX(Component.LEFT_ALIGNMENT);
-        reset.addActionListener(event -> resetStatsAction.run());
-        page.add(reset);
+        JLabel hint = wrapLabel(
+            "<small>Gebaseerd op afgeronde flips in de website. Prijstests en eigen gebruik tellen niet mee.</small>",
+            176);
+        hint.setForeground(MUTED);
+        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        hint.setBorder(new EmptyBorder(7, 0, 0, 0));
+        page.add(hint);
         return page;
     }
 
     private JPanel createSyncPage(Runnable pairAction, Runnable syncAction, Runnable webappAction)
     {
         JPanel page = verticalPanel();
-        JLabel introduction = new JLabel(
-            "<html>Beheer de veilige apparaatkoppeling en synchroniseer je acht Grand Exchange-slots.</html>");
+        JLabel introduction = wrapLabel(
+            "Beheer de veilige apparaatkoppeling en synchroniseer je acht GE-slots.", 176);
         introduction.setAlignmentX(Component.LEFT_ALIGNMENT);
-        introduction.setBorder(new EmptyBorder(0, 0, 8, 0));
+        introduction.setBorder(new EmptyBorder(0, 0, 7, 0));
         page.add(introduction);
 
         JPanel statusPanel = cardPanel();
-        JLabel statusTitle = new JLabel("Verbindingsstatus");
+        JLabel statusTitle = new JLabel("Verbinding");
         statusTitle.setFont(statusTitle.getFont().deriveFont(Font.BOLD));
         statusPanel.add(statusTitle);
-        statusValue.setVerticalAlignment(SwingConstants.TOP);
+        statusValue.setForeground(Color.LIGHT_GRAY);
         statusPanel.add(statusValue);
         page.add(statusPanel);
         page.add(Box.createVerticalStrut(7));
 
-        page.add(actionButton("Apparaat koppelen", "Open de webapp en voer een tijdelijke koppelcode in.", pairAction));
-        page.add(Box.createVerticalStrut(4));
-        page.add(actionButton("Opnieuw synchroniseren", "Stuur een volledige slotsnapshot.", syncAction));
-        page.add(Box.createVerticalStrut(4));
-        page.add(actionButton("Webapp openen", "Open de OSRS Flip Tracker-webapp.", webappAction));
+        page.add(actionBlock("Koppelen", "Open de webapp en voer een tijdelijke code in.", pairAction));
+        page.add(Box.createVerticalStrut(5));
+        page.add(actionBlock("Synchroniseren", "Stuur de volledige toestand van alle GE-slots.", syncAction));
+        page.add(Box.createVerticalStrut(5));
+        page.add(actionBlock("Webapp openen", "Open de OSRS Flip Tracker in je browser.", webappAction));
 
-        JLabel diagnosticHint = new JLabel(
-            "<html><small>Bij problemen kun je in de pluginconfig <b>Uitgebreide logging</b> inschakelen.</small></html>");
+        JLabel diagnosticHint = wrapLabel(
+            "<small>Bij problemen kun je in de pluginconfig uitgebreide logging inschakelen.</small>", 176);
         diagnosticHint.setForeground(MUTED);
         diagnosticHint.setAlignmentX(Component.LEFT_ALIGNMENT);
         diagnosticHint.setBorder(new EmptyBorder(8, 0, 0, 0));
@@ -301,116 +284,114 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         slotsList.repaint();
     }
 
-    private void rebuildPrices()
+    private void rebuildOpportunities()
     {
-        pricesList.removeAll();
-        Map<Integer, List<FlipperOfferView>> byItem = new LinkedHashMap<>();
-        for (FlipperOfferView offer : offers)
+        opportunitiesList.removeAll();
+        if (overview.generatedAt <= 0 && overview.expected.isEmpty() && overview.hourly.isEmpty())
         {
-            byItem.computeIfAbsent(offer.itemId, ignored -> new ArrayList<>()).add(offer);
+            opportunitiesList.add(emptyMessage("Persoonlijke kansen worden opgehaald..."));
+            opportunitiesList.revalidate();
+            opportunitiesList.repaint();
+            return;
         }
-        if (byItem.isEmpty())
+        addOpportunitySection("Top verwachte winst", overview.expected, true);
+        opportunitiesList.add(Box.createVerticalStrut(8));
+        addOpportunitySection("Top winst per uur", overview.hourly, false);
+        if (overview.generatedAt > 0)
         {
-            pricesList.add(emptyMessage("Actieve GE-items verschijnen hier automatisch."));
+            JLabel age = new JLabel("Bijgewerkt " + relativeAge(overview.generatedAt));
+            age.setForeground(MUTED);
+            age.setFont(age.getFont().deriveFont(10f));
+            age.setAlignmentX(Component.LEFT_ALIGNMENT);
+            age.setBorder(new EmptyBorder(6, 1, 2, 1));
+            opportunitiesList.add(age);
         }
-        else
+        opportunitiesList.revalidate();
+        opportunitiesList.repaint();
+    }
+
+    private void addOpportunitySection(
+        String title,
+        List<RuneliteOverviewView.Opportunity> opportunities,
+        boolean expected)
+    {
+        JLabel heading = new JLabel(title);
+        heading.setForeground(GOLD);
+        heading.setFont(heading.getFont().deriveFont(Font.BOLD));
+        heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+        opportunitiesList.add(heading);
+        opportunitiesList.add(Box.createVerticalStrut(4));
+        if (opportunities == null || opportunities.isEmpty())
         {
-            for (Map.Entry<Integer, List<FlipperOfferView>> entry : byItem.entrySet())
-            {
-                pricesList.add(priceCard(entry.getValue(), marketPrices.get(entry.getKey())));
-                pricesList.add(Box.createVerticalStrut(6));
-            }
+            opportunitiesList.add(emptyMessage(expected
+                ? "Geen verwachte winst strikt boven 100k GP."
+                : "Nog geen uitvoerbare uurkansen."));
+            return;
         }
-        pricesList.revalidate();
-        pricesList.repaint();
+        int rank = 1;
+        for (RuneliteOverviewView.Opportunity opportunity : opportunities)
+        {
+            opportunitiesList.add(opportunityCard(opportunity, expected, rank++));
+            opportunitiesList.add(Box.createVerticalStrut(5));
+        }
+    }
+
+    private JPanel opportunityCard(
+        RuneliteOverviewView.Opportunity opportunity,
+        boolean expected,
+        int rank)
+    {
+        JPanel card = cardPanel();
+        JPanel header = itemHeader(opportunity.itemId, opportunity.itemName);
+        JLabel rankLabel = new JLabel("#" + rank);
+        rankLabel.setForeground(MUTED);
+        rankLabel.setFont(rankLabel.getFont().deriveFont(Font.BOLD));
+        header.add(rankLabel, BorderLayout.EAST);
+        card.add(header);
+
+        long mainValue = expected ? opportunity.expectedProfit : opportunity.maximumProfitPerHour;
+        JLabel profit = new JLabel(formatGp(mainValue) + (expected ? "" : "/u"));
+        profit.setForeground(GREEN);
+        profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
+        profit.setAlignmentX(Component.LEFT_ALIGNMENT);
+        profit.setBorder(new EmptyBorder(3, 0, 3, 0));
+        card.add(profit);
+
+        int quantity = expected ? opportunity.expectedQuantity : opportunity.maximumQuantity;
+        card.add(compactMetric("Aantal", formatNumber(quantity)));
+        card.add(compactMetric("Koop", priceOrDash(opportunity.buyPrice)));
+        card.add(compactMetric("Verkoop", priceOrDash(opportunity.sellPrice)));
+        card.add(compactMetric("Nu instabuy", priceOrDash(opportunity.instantBuy)));
+        card.add(compactMetric("Nu instasell", priceOrDash(opportunity.instantSell)));
+        if (!expected)
+        {
+            card.add(compactMetric("Cycluswinst", formatGp(opportunity.maximumCycleProfit)));
+        }
+        return card;
     }
 
     private void rebuildStats()
     {
-        if (stats == null)
-        {
-            return;
-        }
-        profitValue.setText(formatSignedGp(stats.realizedProfit));
-        profitValue.setForeground(stats.realizedProfit < 0 ? RED : GREEN);
-        roiValue.setText(String.format(Locale.US, "%.2f%%", stats.roi()).replace('.', ','));
-        taxValue.setText(formatGp(stats.taxPaid));
-        volumeValue.setText(formatGp(stats.invested + stats.grossRevenue));
-        flipsValue.setText(Integer.toString(stats.completedBuyOffers + stats.completedSellOffers));
-
-        statsItems.removeAll();
-        List<SessionStatsTracker.SessionItemStats> itemRows = new ArrayList<>(stats.items.values());
-        itemRows.removeIf(item -> item.matchedQuantity <= 0);
-        itemRows.sort((left, right) -> Long.compare(Math.abs(right.profit), Math.abs(left.profit)));
-        if (itemRows.isEmpty())
-        {
-            statsItems.add(emptyMessage("Nog geen gekoppelde koop-verkoopresultaten in deze sessie."));
-        }
-        else
-        {
-            for (SessionStatsTracker.SessionItemStats item : itemRows)
-            {
-                statsItems.add(sessionItemCard(item));
-                statsItems.add(Box.createVerticalStrut(4));
-            }
-        }
-        updateClocks();
-        statsItems.revalidate();
-        statsItems.repaint();
-    }
-
-    private JPanel priceCard(List<FlipperOfferView> itemOffers, MarketPriceView market)
-    {
-        FlipperOfferView first = itemOffers.get(0);
-        JPanel card = cardPanel();
-        card.add(itemHeader(first.itemId, first.itemName));
-
-        JPanel prices = new JPanel(new GridLayout(0, 2, 5, 3));
-        prices.setOpaque(false);
-        addPair(prices, "Wiki instant buy", market == null ? "Laden…" : priceOrDash(market.instantBuyPrice), GREEN);
-        addPair(prices, "Wiki instant sell", market == null ? "Laden…" : priceOrDash(market.instantSellPrice), GREEN);
-        for (FlipperOfferView offer : itemOffers)
-        {
-            String label = "buy".equals(offer.side) ? "Mijn koopoffer" : "Mijn verkoopoffer";
-            addPair(prices, label, formatNumber(offer.price) + " gp", Color.WHITE);
-        }
-        card.add(prices);
-        if (market != null)
-        {
-            long newest = Math.max(market.instantBuyAt, market.instantSellAt);
-            JLabel age = new JLabel("Wiki bijgewerkt: " + relativeAge(newest));
-            age.setForeground(MUTED);
-            age.setFont(age.getFont().deriveFont(10f));
-            card.add(age);
-        }
-        return card;
-    }
-
-    private JPanel sessionItemCard(SessionStatsTracker.SessionItemStats item)
-    {
-        JPanel card = new JPanel(new BorderLayout(6, 0));
-        card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        card.setBorder(new EmptyBorder(6, 6, 6, 6));
-        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
-        card.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(itemIcon(item.itemId), BorderLayout.WEST);
-        JLabel name = new JLabel("<html><b>" + escapeHtml(item.itemName) + "</b><br><small>" +
-            formatNumber(item.matchedQuantity) + " gematcht</small></html>");
-        card.add(name, BorderLayout.CENTER);
-        JLabel profit = new JLabel(formatSignedGp(item.profit));
-        profit.setForeground(item.profit < 0 ? RED : GREEN);
-        profit.setFont(profit.getFont().deriveFont(Font.BOLD));
-        card.add(profit, BorderLayout.EAST);
-        return card;
+        PeriodChoice selected = (PeriodChoice) statsPeriod.getSelectedItem();
+        RuneliteOverviewView.PeriodStats stats = overview.statsFor(selected == null ? "today" : selected.key);
+        statsProfit.setText(formatSignedGp(stats.realizedProfit));
+        statsProfit.setForeground(stats.realizedProfit < 0 ? RED : GREEN);
+        statsRoi.setText(String.format(Locale.US, "%.2f%%", stats.roiPercent).replace('.', ','));
+        statsRoi.setForeground(stats.roiPercent < 0 ? RED : Color.WHITE);
+        statsHourly.setText(formatSignedGp(stats.profitPerHour) + "/u");
+        statsHourly.setForeground(stats.profitPerHour < 0 ? RED : GREEN);
+        statsTax.setText(formatGp(stats.geTax));
+        statsVolume.setText(formatGp(stats.tradingVolume));
+        statsFlips.setText(Integer.toString(stats.completedFlips));
     }
 
     private JPanel itemHeader(int itemId, String itemName)
     {
-        JPanel header = new JPanel(new BorderLayout(6, 0));
+        JPanel header = new JPanel(new BorderLayout(5, 0));
         header.setOpaque(false);
         header.setAlignmentX(Component.LEFT_ALIGNMENT);
         header.add(itemIcon(itemId), BorderLayout.WEST);
-        JLabel name = new JLabel("<html><b>" + escapeHtml(itemName) + "</b></html>");
+        JLabel name = wrapLabel("<b>" + escapeHtml(itemName) + "</b>", 120);
         header.add(name, BorderLayout.CENTER);
         return header;
     }
@@ -418,8 +399,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private JLabel itemIcon(int itemId)
     {
         JLabel icon = new JLabel();
-        icon.setPreferredSize(new Dimension(36, 36));
-        icon.setMinimumSize(new Dimension(36, 36));
+        icon.setPreferredSize(new Dimension(32, 32));
+        icon.setMinimumSize(new Dimension(32, 32));
         AsyncBufferedImage image = itemManager.getImage(itemId);
         image.addTo(icon);
         return icon;
@@ -431,13 +412,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         for (OfferCard card : offerCards)
         {
             card.updateTime(now);
-        }
-        if (stats != null)
-        {
-            sessionValue.setText(formatDuration(Math.max(0, now - stats.startedAt)));
-            long hourly = stats.hourlyProfit(now);
-            hourlyValue.setText(formatSignedGp(hourly) + "/u");
-            hourlyValue.setForeground(hourly < 0 ? RED : GREEN);
         }
     }
 
@@ -467,21 +441,29 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         panel.setOpaque(true);
         panel.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
-            new EmptyBorder(8, 8, 8, 8)));
+            new EmptyBorder(7, 7, 7, 7)));
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         return panel;
     }
 
     private static JPanel metric(String title, JLabel value)
     {
-        JPanel row = new JPanel(new BorderLayout(6, 0));
+        JPanel row = new JPanel(new BorderLayout(5, 0));
         row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         JLabel label = new JLabel(title);
         label.setForeground(MUTED);
+        label.setFont(label.getFont().deriveFont(11f));
         row.add(label, BorderLayout.WEST);
+        value.setHorizontalAlignment(SwingConstants.RIGHT);
         row.add(value, BorderLayout.EAST);
         return row;
+    }
+
+    private static JPanel compactMetric(String title, String value)
+    {
+        return metric(title, valueLabel(value, Color.WHITE, 10.5f));
     }
 
     private static JLabel valueLabel(String text, Color color, float size)
@@ -492,35 +474,41 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         return label;
     }
 
-    private static JButton actionButton(String label, String tooltip, Runnable action)
+    private static JPanel actionBlock(String label, String description, Runnable action)
     {
+        JPanel block = verticalPanel();
+        block.setAlignmentX(Component.LEFT_ALIGNMENT);
         JButton button = new JButton(label);
-        button.setToolTipText(tooltip);
         button.setAlignmentX(Component.LEFT_ALIGNMENT);
-        button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
         button.addActionListener(event -> action.run());
-        return button;
+        block.add(button);
+        JLabel hint = wrapLabel("<small>" + escapeHtml(description) + "</small>", 176);
+        hint.setForeground(MUTED);
+        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        hint.setBorder(new EmptyBorder(2, 2, 0, 2));
+        block.add(hint);
+        return block;
     }
 
     private static JLabel emptyMessage(String text)
     {
-        JLabel label = new JLabel("<html><div style='text-align:center'>" + escapeHtml(text) + "</div></html>");
+        JLabel label = wrapLabel("<div style='text-align:center'>" + escapeHtml(text) + "</div>", 170);
         label.setForeground(MUTED);
         label.setHorizontalAlignment(SwingConstants.CENTER);
         label.setAlignmentX(Component.CENTER_ALIGNMENT);
-        label.setBorder(new EmptyBorder(20, 5, 20, 5));
+        label.setBorder(new EmptyBorder(12, 4, 12, 4));
         return label;
     }
 
-    private static void addPair(JPanel panel, String label, String value, Color valueColor)
+    private static JLabel wrapLabel(String value, int width)
     {
-        JLabel key = new JLabel(label);
-        key.setForeground(MUTED);
-        panel.add(key);
-        JLabel result = new JLabel(value, SwingConstants.RIGHT);
-        result.setForeground(valueColor);
-        result.setFont(result.getFont().deriveFont(Font.BOLD));
-        panel.add(result);
+        return new JLabel(html(value, width));
+    }
+
+    private static String html(String value, int width)
+    {
+        return "<html><div style='width:" + width + "px'>" + (value == null ? "" : value) + "</div></html>";
     }
 
     static String formatDuration(long seconds)
@@ -602,35 +590,45 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             panel = cardPanel();
 
             JPanel top = itemHeader(offer.itemId, offer.itemName);
-            elapsed.setForeground(MUTED);
-            elapsed.setFont(elapsed.getFont().deriveFont(10f));
-            top.add(elapsed, BorderLayout.EAST);
+            JLabel slot = new JLabel("S" + offer.slotNumber);
+            slot.setForeground(MUTED);
+            slot.setFont(slot.getFont().deriveFont(Font.BOLD, 10f));
+            top.add(slot, BorderLayout.EAST);
             panel.add(top);
 
-            JPanel detail = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 2));
-            detail.setOpaque(false);
+            JPanel state = new JPanel(new BorderLayout(4, 0));
+            state.setOpaque(false);
+            state.setMaximumSize(new Dimension(Integer.MAX_VALUE, 23));
             JLabel side = new JLabel("buy".equals(offer.side) ? "Koop" : "Verkoop");
             side.setForeground("buy".equals(offer.side) ? GREEN : GOLD);
             side.setFont(side.getFont().deriveFont(Font.BOLD));
-            detail.add(side);
-            detail.add(new JLabel("  " + formatNumber(offer.filledQuantity) + " / " +
-                formatNumber(offer.totalQuantity) + "  ·  " + statusText(offer.status)));
-            panel.add(detail);
+            state.add(side, BorderLayout.WEST);
+            elapsed.setForeground(MUTED);
+            elapsed.setFont(elapsed.getFont().deriveFont(10f));
+            state.add(elapsed, BorderLayout.EAST);
+            panel.add(state);
+            panel.add(compactMetric("Gevuld", formatNumber(offer.filledQuantity) + " / " + formatNumber(offer.totalQuantity)));
+            panel.add(compactMetric("Offerprijs", priceOrDash(offer.price)));
+            if ("buy".equals(offer.side) && offer.suggestedSellPrice > 0)
+            {
+                JPanel target = compactMetric("Verkoopdoel", priceOrDash(offer.suggestedSellPrice));
+                Component value = ((BorderLayout) target.getLayout()).getLayoutComponent(BorderLayout.EAST);
+                if (value != null)
+                {
+                    value.setForeground(BLUE);
+                }
+                panel.add(target);
+            }
 
             JProgressBar progress = new JProgressBar(0, Math.max(1, offer.totalQuantity));
             progress.setValue(Math.min(offer.totalQuantity, Math.max(0, offer.filledQuantity)));
             progress.setForeground("buy".equals(offer.side) ? GREEN : GOLD);
             progress.setBackground(ColorScheme.DARK_GRAY_COLOR);
             progress.setBorderPainted(false);
-            progress.setPreferredSize(new Dimension(180, 7));
-            progress.setMaximumSize(new Dimension(Integer.MAX_VALUE, 7));
+            progress.setPreferredSize(new Dimension(170, 6));
+            progress.setMaximumSize(new Dimension(Integer.MAX_VALUE, 6));
+            progress.setAlignmentX(Component.LEFT_ALIGNMENT);
             panel.add(progress);
-
-            JLabel price = new JLabel(formatNumber(offer.price) + " gp per item");
-            price.setHorizontalAlignment(SwingConstants.CENTER);
-            price.setForeground(Color.LIGHT_GRAY);
-            price.setBorder(new EmptyBorder(4, 0, 0, 0));
-            panel.add(price);
             updateTime(Instant.now().getEpochSecond());
         }
 
@@ -640,20 +638,25 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
     }
 
-    private static String statusText(String status)
+    private enum PeriodChoice
     {
-        if ("partially_filled".equals(status))
+        TODAY("today", "Vandaag"),
+        MONTH("month", "Deze maand"),
+        TOTAL("total", "Totaal");
+
+        final String key;
+        final String label;
+
+        PeriodChoice(String key, String label)
         {
-            return "gedeeltelijk gevuld";
+            this.key = key;
+            this.label = label;
         }
-        if ("completed".equals(status))
+
+        @Override
+        public String toString()
         {
-            return "voltooid";
+            return label;
         }
-        if ("cancelled".equals(status))
-        {
-            return "geannuleerd";
-        }
-        return "actief";
     }
 }

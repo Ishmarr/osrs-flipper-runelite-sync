@@ -11,6 +11,7 @@ final class FlipperOfferView
     final int filledQuantity;
     final String status;
     final long startedAt;
+    final int suggestedSellPrice;
 
     FlipperOfferView(
         int slotNumber,
@@ -21,7 +22,8 @@ final class FlipperOfferView
         int totalQuantity,
         int filledQuantity,
         String status,
-        long startedAt)
+        long startedAt,
+        int suggestedSellPrice)
     {
         this.slotNumber = slotNumber;
         this.itemId = itemId;
@@ -32,5 +34,6 @@ final class FlipperOfferView
         this.filledQuantity = filledQuantity;
         this.status = status;
         this.startedAt = startedAt;
+        this.suggestedSellPrice = Math.max(0, suggestedSellPrice);
     }
 }

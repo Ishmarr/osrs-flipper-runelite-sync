@@ -9,10 +9,12 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - bewaart tijdelijk niet-verzonden gebeurtenissen lokaal en probeert ze opnieuw;
 - stuurt periodieke volledige snapshots en heartbeats;
 - vergelijkt de lokale toestand met de server en herstelt verschillen automatisch;
-- biedt een RuneLite-zijpaneel met **Apparaat koppelen**, **Opnieuw synchroniseren** en **Webapp openen**;
+- biedt een compact RuneLite-zijpaneel met **Slots**, **Kansen**, **Stats** en **Sync**;
 - toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;
-- toont voor actieve items de actuele Wiki instant-buy- en instant-sellprijs rechtstreeks uit de officiële prijsfeed, zonder D1-reads;
-- houdt lokaal de winst, ROI, GE-tax, handelsvolume en winst per uur bij voor koop/verkoopfills die in de huidige RuneLite-sessie zijn gezien;
+- bewaart bij de start van een geadviseerde kooporder het toenmalige verkoopdoel in het lokale slot;
+- toont de vijf hoogste verwachte scannerwinsten boven 100.000 GP en de vijf hoogste volledige-cycluswinsten per uur;
+- toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
+- haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
 - toont de actuele verbindingsstatus;
 - bevat optionele uitgebreide diagnose­logging.
 
@@ -39,12 +41,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 
 ## Nieuw in v5.1.0
 
-- het zijpaneel heeft afzonderlijke tabs voor **Slots**, **Prijzen**, **Stats** en **Sync**;
-- slotkaarten worden rechtstreeks uit RuneLite bijgewerkt en veroorzaken geen extra D1-reads;
-- marktprijzen komen maximaal eens per vijf minuten per actief item rechtstreeks uit de officiële Wiki-prijsfeed;
-- sessiewinst gebruikt alleen werkelijk waargenomen fillverschillen en koppelt verkopen FIFO aan aankopen van hetzelfde item;
-- verkopen waarvan de aankoop vóór het openen van de plugin lag, worden bewust niet als verzonnen winst meegerekend;
-- gedeeltelijke fills en herhaalde RuneLite-events worden niet dubbel geteld.
+- **Prijzen** heet voortaan **Kansen** en gebruikt exact dezelfde persoonlijke berekening als de webscanner;
+- de top vijf verwachte winsten gebruikt het verwachte aantal en vereist strikt meer dan 100.000 GP verwachte winst;
+- de top vijf uurkansen toont het cash-, buy-limit- en snelheidsbegrensde aantal, GP/u en cycluswinst;
+- adviesprijzen en actuele instaprijzen staan in smalle verticale kaarten die binnen de RuneLite-zijbalk blijven;
+- een koopslot bevriest het verkoopdoel dat gold toen de order werd gestart;
+- **Stats** heeft een keuze tussen vandaag, deze maand en totaal en gebruikt de canonieke websitegegevens;
+- kansen en statistieken verversen normaal maximaal eens per vijf minuten; de knop in **Kansen** forceert een actuele herberekening.
 
 ## Configuratie
 

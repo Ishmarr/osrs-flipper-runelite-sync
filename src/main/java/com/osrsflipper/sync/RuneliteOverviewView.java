@@ -1,0 +1,154 @@
+package com.osrsflipper.sync;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+final class RuneliteOverviewView
+{
+    final List<Opportunity> expected;
+    final List<Opportunity> hourly;
+    final PeriodStats today;
+    final PeriodStats month;
+    final PeriodStats total;
+    final long generatedAt;
+
+    RuneliteOverviewView(
+        List<Opportunity> expected,
+        List<Opportunity> hourly,
+        PeriodStats today,
+        PeriodStats month,
+        PeriodStats total,
+        long generatedAt)
+    {
+        this.expected = immutable(expected);
+        this.hourly = immutable(hourly);
+        this.today = today == null ? PeriodStats.empty() : today;
+        this.month = month == null ? PeriodStats.empty() : month;
+        this.total = total == null ? PeriodStats.empty() : total;
+        this.generatedAt = Math.max(0, generatedAt);
+    }
+
+    static RuneliteOverviewView empty()
+    {
+        PeriodStats empty = PeriodStats.empty();
+        return new RuneliteOverviewView(Collections.emptyList(), Collections.emptyList(), empty, empty, empty, 0);
+    }
+
+    Opportunity opportunityForItem(int itemId)
+    {
+        for (Opportunity opportunity : expected)
+        {
+            if (opportunity.itemId == itemId)
+            {
+                return opportunity;
+            }
+        }
+        for (Opportunity opportunity : hourly)
+        {
+            if (opportunity.itemId == itemId)
+            {
+                return opportunity;
+            }
+        }
+        return null;
+    }
+
+    PeriodStats statsFor(String period)
+    {
+        if ("month".equals(period))
+        {
+            return month;
+        }
+        if ("total".equals(period))
+        {
+            return total;
+        }
+        return today;
+    }
+
+    private static List<Opportunity> immutable(List<Opportunity> source)
+    {
+        return Collections.unmodifiableList(new ArrayList<>(source == null
+            ? Collections.emptyList()
+            : source));
+    }
+
+    static final class Opportunity
+    {
+        final int itemId;
+        final String itemName;
+        final String ranking;
+        final int buyPrice;
+        final int sellPrice;
+        final int instantBuy;
+        final int instantSell;
+        final int expectedQuantity;
+        final long expectedProfit;
+        final int maximumQuantity;
+        final long maximumProfitPerHour;
+        final long maximumCycleProfit;
+        final long priceUpdatedAt;
+
+        Opportunity(
+            int itemId,
+            String itemName,
+            String ranking,
+            int buyPrice,
+            int sellPrice,
+            int instantBuy,
+            int instantSell,
+            int expectedQuantity,
+            long expectedProfit,
+            int maximumQuantity,
+            long maximumProfitPerHour,
+            long maximumCycleProfit,
+            long priceUpdatedAt)
+        {
+            this.itemId = Math.max(0, itemId);
+            this.itemName = itemName == null ? "" : itemName;
+            this.ranking = ranking == null ? "" : ranking;
+            this.buyPrice = Math.max(0, buyPrice);
+            this.sellPrice = Math.max(0, sellPrice);
+            this.instantBuy = Math.max(0, instantBuy);
+            this.instantSell = Math.max(0, instantSell);
+            this.expectedQuantity = Math.max(0, expectedQuantity);
+            this.expectedProfit = Math.max(0, expectedProfit);
+            this.maximumQuantity = Math.max(0, maximumQuantity);
+            this.maximumProfitPerHour = Math.max(0, maximumProfitPerHour);
+            this.maximumCycleProfit = Math.max(0, maximumCycleProfit);
+            this.priceUpdatedAt = Math.max(0, priceUpdatedAt);
+        }
+    }
+
+    static final class PeriodStats
+    {
+        final long realizedProfit;
+        final double roiPercent;
+        final long profitPerHour;
+        final long geTax;
+        final long tradingVolume;
+        final int completedFlips;
+
+        PeriodStats(
+            long realizedProfit,
+            double roiPercent,
+            long profitPerHour,
+            long geTax,
+            long tradingVolume,
+            int completedFlips)
+        {
+            this.realizedProfit = realizedProfit;
+            this.roiPercent = Double.isFinite(roiPercent) ? roiPercent : 0;
+            this.profitPerHour = profitPerHour;
+            this.geTax = Math.max(0, geTax);
+            this.tradingVolume = Math.max(0, tradingVolume);
+            this.completedFlips = Math.max(0, completedFlips);
+        }
+
+        static PeriodStats empty()
+        {
+            return new PeriodStats(0, 0, 0, 0, 0, 0);
+        }
+    }
+}
