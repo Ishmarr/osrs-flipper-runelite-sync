@@ -7,6 +7,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -24,6 +25,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -41,6 +43,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color RED = new Color(230, 126, 118);
     private static final Color BLUE = new Color(102, 190, 235);
     private static final Color MUTED = new Color(170, 170, 170);
+    private static final float DETAIL_FONT_SIZE = 12.5f;
+    private static final int DETAIL_ROW_HEIGHT = 23;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
     private static final String STATS = "stats";
@@ -417,10 +421,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private static JPanel verticalPanel()
     {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setOpaque(false);
-        return panel;
+        return new WidthTrackingPanel();
     }
 
     private static JScrollPane scroll(JPanel content)
@@ -451,10 +452,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         JPanel row = new JPanel(new BorderLayout(5, 0));
         row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMinimumSize(new Dimension(0, DETAIL_ROW_HEIGHT));
+        row.setPreferredSize(new Dimension(180, DETAIL_ROW_HEIGHT));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, DETAIL_ROW_HEIGHT));
         JLabel label = new JLabel(title);
         label.setForeground(MUTED);
-        label.setFont(label.getFont().deriveFont(11f));
+        label.setFont(label.getFont().deriveFont(DETAIL_FONT_SIZE));
         row.add(label, BorderLayout.WEST);
         value.setHorizontalAlignment(SwingConstants.RIGHT);
         row.add(value, BorderLayout.EAST);
@@ -463,7 +467,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private static JPanel compactMetric(String title, String value)
     {
-        return metric(title, valueLabel(value, Color.WHITE, 10.5f));
+        return metric(title, valueLabel(value, Color.WHITE, DETAIL_FONT_SIZE));
     }
 
     private static JLabel valueLabel(String text, Color color, float size)
@@ -635,6 +639,47 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         void updateTime(long now)
         {
             elapsed.setText(formatDuration(Math.max(0, now - offer.startedAt)));
+        }
+    }
+
+    private static final class WidthTrackingPanel extends JPanel implements Scrollable
+    {
+        WidthTrackingPanel()
+        {
+            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+            setOpaque(false);
+            setAlignmentX(Component.LEFT_ALIGNMENT);
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize()
+        {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+        {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+        {
+            return Math.max(16, visibleRect.height - 16);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth()
+        {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight()
+        {
+            return false;
         }
     }
 
