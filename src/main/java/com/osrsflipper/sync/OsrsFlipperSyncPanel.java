@@ -16,6 +16,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -72,6 +74,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private List<FlipperOfferView> offers = Collections.emptyList();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
     private Map<Integer, LastTradePriceView> lastTradePrices = Collections.emptyMap();
+    private int focusedItemId;
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
@@ -80,6 +83,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         Runnable webappAction,
         Runnable refreshOverviewAction)
     {
+        super(false);
         this.itemManager = itemManager;
         setLayout(new BorderLayout(0, 7));
         setBorder(new EmptyBorder(7, 6, 7, 6));
@@ -133,6 +137,17 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             offers = copy;
             rebuildSlots();
+            rebuildOpportunities();
+        });
+    }
+
+    void updateFocusedItem(int itemId)
+    {
+        int safeItemId = Math.max(0, itemId);
+        SwingUtilities.invokeLater(() ->
+        {
+            focusedItemId = safeItemId;
+            rebuildOpportunities();
         });
     }
 
@@ -164,7 +179,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         tabs.setOpaque(false);
         tabs.setAlignmentX(Component.LEFT_ALIGNMENT);
         addTab(tabs, "Slots", SLOTS);
-        addTab(tabs, "Kansen", OPPORTUNITIES);
+        addTab(tabs, "Flips", OPPORTUNITIES);
         addTab(tabs, "Stats", STATS);
         addTab(tabs, "Sync", SYNC);
         return tabs;
@@ -203,7 +218,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         JLabel text = wrapLabel("<b>Beste flips</b><br><small>Zelfde model als de webscanner</small>", 150);
         heading.add(text, BorderLayout.CENTER);
         JButton refresh = new JButton("↻");
-        refresh.setToolTipText("Kansen en statistieken vernieuwen");
+        refresh.setToolTipText("Flips en statistieken vernieuwen");
         refresh.setPreferredSize(new Dimension(34, 28));
         refresh.addActionListener(event -> refreshAction.run());
         heading.add(refresh, BorderLayout.EAST);
@@ -315,16 +330,28 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void rebuildOpportunities()
     {
         opportunitiesList.removeAll();
-        if (overview.generatedAt <= 0 && overview.expected.isEmpty() && overview.hourly.isEmpty())
+        if (overview.generatedAt <= 0 && overview.hourly.isEmpty() && overview.focus == null)
         {
-            opportunitiesList.add(emptyMessage("Persoonlijke kansen worden opgehaald..."));
+            opportunitiesList.add(emptyMessage("Persoonlijke flips worden opgehaald..."));
             opportunitiesList.revalidate();
             opportunitiesList.repaint();
             return;
         }
-        addOpportunitySection("Top verwachte winst", overview.expected, true);
-        opportunitiesList.add(Box.createVerticalStrut(8));
-        addOpportunitySection("Top winst per uur", overview.hourly, false);
+        if (focusedItemId > 0)
+        {
+            RuneliteOverviewView.Opportunity focused = overview.opportunityForItem(focusedItemId);
+            addOpportunitySection(
+                "Geselecteerde flip",
+                focused == null ? Collections.emptyList() : Collections.singletonList(focused),
+                "Dit geopende GE-item voldoet niet aan de actuele scannerregels.");
+        }
+        else
+        {
+            addOpportunitySection(
+                "Top winst per uur",
+                visibleHourlyOpportunities(overview.hourly, offers),
+                "Nog geen uitvoerbare uurflips.");
+        }
         if (overview.generatedAt > 0)
         {
             JLabel age = new JLabel("Bijgewerkt " + relativeAge(overview.generatedAt));
@@ -341,7 +368,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void addOpportunitySection(
         String title,
         List<RuneliteOverviewView.Opportunity> opportunities,
-        boolean expected)
+        String emptyText)
     {
         JLabel heading = new JLabel(title);
         heading.setForeground(GOLD);
@@ -351,22 +378,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         opportunitiesList.add(Box.createVerticalStrut(4));
         if (opportunities == null || opportunities.isEmpty())
         {
-            opportunitiesList.add(emptyMessage(expected
-                ? "Geen verwachte winst strikt boven 100k GP."
-                : "Nog geen uitvoerbare uurkansen."));
+            opportunitiesList.add(emptyMessage(emptyText));
             return;
         }
         int rank = 1;
         for (RuneliteOverviewView.Opportunity opportunity : opportunities)
         {
-            opportunitiesList.add(opportunityCard(opportunity, expected, rank++));
+            opportunitiesList.add(opportunityCard(opportunity, rank++));
             opportunitiesList.add(Box.createVerticalStrut(5));
         }
     }
 
     private JPanel opportunityCard(
         RuneliteOverviewView.Opportunity opportunity,
-        boolean expected,
         int rank)
     {
         JPanel card = cardPanel();
@@ -377,16 +401,14 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         header.add(rankLabel, BorderLayout.EAST);
         card.add(header);
 
-        long mainValue = expected ? opportunity.expectedProfit : opportunity.maximumProfitPerHour;
-        JLabel profit = new JLabel(formatGp(mainValue) + (expected ? "" : "/u"));
+        JLabel profit = new JLabel(formatGp(opportunity.maximumProfitPerHour) + "/u");
         profit.setForeground(GREEN);
         profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
         profit.setAlignmentX(Component.LEFT_ALIGNMENT);
         profit.setBorder(new EmptyBorder(3, 0, 3, 0));
         card.add(profit);
 
-        int quantity = expected ? opportunity.expectedQuantity : opportunity.maximumQuantity;
-        card.add(compactMetric("Aantal", formatNumber(quantity)));
+        card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
         card.add(compactMetric("Koop", priceOrDash(opportunity.buyPrice)));
         card.add(compactMetric("Verkoop", priceOrDash(opportunity.sellPrice)));
         card.add(compactMetric("Nu instabuy", priceOrDash(opportunity.instantBuy)));
@@ -400,11 +422,37 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             card.add(compactMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice)));
         }
-        if (!expected)
-        {
-            card.add(compactMetric("Cycluswinst", formatGp(opportunity.maximumCycleProfit)));
-        }
+        card.add(compactMetric("Cycluswinst", formatGp(opportunity.maximumCycleProfit)));
         return card;
+    }
+
+    static List<RuneliteOverviewView.Opportunity> visibleHourlyOpportunities(
+        List<RuneliteOverviewView.Opportunity> opportunities,
+        List<FlipperOfferView> activeOffers)
+    {
+        Set<Integer> activeItemIds = new HashSet<>();
+        if (activeOffers != null)
+        {
+            for (FlipperOfferView offer : activeOffers)
+            {
+                if (offer != null && offer.itemId > 0)
+                {
+                    activeItemIds.add(offer.itemId);
+                }
+            }
+        }
+        List<RuneliteOverviewView.Opportunity> visible = new ArrayList<>();
+        if (opportunities != null)
+        {
+            for (RuneliteOverviewView.Opportunity opportunity : opportunities)
+            {
+                if (opportunity != null && !activeItemIds.contains(opportunity.itemId))
+                {
+                    visible.add(opportunity);
+                }
+            }
+        }
+        return visible;
     }
 
     private void rebuildStats()
@@ -501,6 +549,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         JScrollPane scroll = new JScrollPane(content);
         scroll.setBorder(null);
         scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.setWheelScrollingEnabled(true);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         scroll.getViewport().setOpaque(false);
         scroll.setOpaque(false);

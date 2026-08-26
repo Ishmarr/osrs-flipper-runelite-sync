@@ -33,6 +33,24 @@ public class RuneliteOverviewViewTest
     }
 
     @Test
+    public void focusedOpportunityWinsOverCachedRankings()
+    {
+        RuneliteOverviewView.Opportunity cached = opportunity(202, 2_250, 2_500);
+        RuneliteOverviewView.Opportunity focused = opportunity(202, 2_300, 2_650);
+        RuneliteOverviewView view = new RuneliteOverviewView(
+            Collections.emptyList(),
+            Collections.singletonList(cached),
+            focused,
+            null,
+            null,
+            null,
+            1234);
+
+        assertSame(focused, view.opportunityForItem(202));
+        assertEquals(2_650, view.opportunityForItem(202).sellPrice);
+    }
+
+    @Test
     public void selectsTodayMonthAndTotalWithoutSharingMutableLists()
     {
         RuneliteOverviewView.PeriodStats today = new RuneliteOverviewView.PeriodStats(1, 2, 3, 4, 5, 6);

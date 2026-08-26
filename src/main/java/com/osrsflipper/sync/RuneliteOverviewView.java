@@ -8,6 +8,7 @@ final class RuneliteOverviewView
 {
     final List<Opportunity> expected;
     final List<Opportunity> hourly;
+    final Opportunity focus;
     final PeriodStats today;
     final PeriodStats month;
     final PeriodStats total;
@@ -21,8 +22,21 @@ final class RuneliteOverviewView
         PeriodStats total,
         long generatedAt)
     {
+        this(expected, hourly, null, today, month, total, generatedAt);
+    }
+
+    RuneliteOverviewView(
+        List<Opportunity> expected,
+        List<Opportunity> hourly,
+        Opportunity focus,
+        PeriodStats today,
+        PeriodStats month,
+        PeriodStats total,
+        long generatedAt)
+    {
         this.expected = immutable(expected);
         this.hourly = immutable(hourly);
+        this.focus = focus;
         this.today = today == null ? PeriodStats.empty() : today;
         this.month = month == null ? PeriodStats.empty() : month;
         this.total = total == null ? PeriodStats.empty() : total;
@@ -32,11 +46,16 @@ final class RuneliteOverviewView
     static RuneliteOverviewView empty()
     {
         PeriodStats empty = PeriodStats.empty();
-        return new RuneliteOverviewView(Collections.emptyList(), Collections.emptyList(), empty, empty, empty, 0);
+        return new RuneliteOverviewView(
+            Collections.emptyList(), Collections.emptyList(), null, empty, empty, empty, 0);
     }
 
     Opportunity opportunityForItem(int itemId)
     {
+        if (focus != null && focus.itemId == itemId)
+        {
+            return focus;
+        }
         for (Opportunity opportunity : expected)
         {
             if (opportunity.itemId == itemId)
