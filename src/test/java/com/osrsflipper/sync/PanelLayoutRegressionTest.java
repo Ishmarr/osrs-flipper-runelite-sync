@@ -5,6 +5,7 @@ import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.lang.reflect.Method;
 import java.lang.reflect.Field;
+import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import org.junit.Test;
@@ -69,5 +70,21 @@ public class PanelLayoutRegressionTest
         assertTrue(label.getFont().isBold());
         assertTrue(value.getFont().isBold());
         assertEquals(31, row.getPreferredSize().height);
+    }
+
+    @Test
+    public void cashstackSaveButtonIsAReadablePrimaryAction() throws Exception
+    {
+        Method factory = OsrsFlipperSyncPanel.class.getDeclaredMethod(
+            "primaryActionButton", String.class);
+        factory.setAccessible(true);
+        JButton button = (JButton) factory.invoke(null, "Cashstack opslaan");
+
+        assertTrue(button.getFont().isBold());
+        assertEquals(15f, button.getFont().getSize2D(), 0.001f);
+        assertTrue(button.isOpaque());
+        assertTrue(button.isContentAreaFilled());
+        assertEquals(Integer.MAX_VALUE, button.getMaximumSize().width);
+        assertEquals(40, button.getPreferredSize().height);
     }
 }

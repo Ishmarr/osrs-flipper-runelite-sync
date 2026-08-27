@@ -65,6 +65,17 @@ public class SessionStatsTrackerTest
     }
 
     @Test
+    public void lowestSellPriceBreaksEvenAfterGeTax()
+    {
+        assertEquals(49, SessionStatsTracker.calculateLowestBreakEvenSellPrice(49, "Cheap item"));
+        assertEquals(51, SessionStatsTracker.calculateLowestBreakEvenSellPrice(50, "Regular item"));
+        assertEquals(1_020, SessionStatsTracker.calculateLowestBreakEvenSellPrice(1_000, "Regular item"));
+        assertEquals(15_000_000,
+            SessionStatsTracker.calculateLowestBreakEvenSellPrice(15_000_000, "Old school bond"));
+        assertEquals(0, SessionStatsTracker.calculateLowestBreakEvenSellPrice(0, "Regular item"));
+    }
+
+    @Test
     public void formatsLongDurationsWithoutWrapping()
     {
         assertEquals("00:00:00", OsrsFlipperSyncPanel.formatDuration(0));

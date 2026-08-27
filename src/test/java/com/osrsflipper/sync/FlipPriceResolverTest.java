@@ -15,7 +15,7 @@ public class FlipPriceResolverTest
     }
 
     @Test
-    public void buyUsesTheHighestWikiOrPriceTestSellReference()
+    public void pricesUseTheStrongestWikiOrPriceTestReference()
     {
         LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_700, 20, 21);
         assertEquals(1_754, FlipPriceResolver.buyPrice(opportunity(), priceTest));
@@ -23,6 +23,20 @@ public class FlipPriceResolverTest
 
         LastTradePriceView higherPriceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
         assertEquals(1_801, FlipPriceResolver.buyPrice(opportunity(), higherPriceTest));
+
+        LastTradePriceView lowerBuyPriceTest = new LastTradePriceView(101, 1_700, 1_800, 20, 21);
+        assertEquals(1_828, FlipPriceResolver.sellPrice(opportunity(), lowerBuyPriceTest));
+    }
+
+    @Test
+    public void rawMarketPricesUseTheSameRulesAsOpportunityCards()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
+        assertEquals(1_801, FlipPriceResolver.buyPrice(1_750, 1_700, priceTest));
+        assertEquals(1_899, FlipPriceResolver.sellPrice(1_850, 1_920, priceTest));
+
+        assertEquals(1_751, FlipPriceResolver.buyPrice(1_750, 1_700, null));
+        assertEquals(1_849, FlipPriceResolver.sellPrice(1_850, 1_920, null));
     }
 
     private static RuneliteOverviewView.Opportunity opportunity()

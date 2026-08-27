@@ -188,6 +188,36 @@ final class SessionStatsTracker
         return Math.min((int) Math.floor(sellPrice * 0.02d), 5_000_000);
     }
 
+    static int calculateLowestBreakEvenSellPrice(int buyPrice, String itemName)
+    {
+        if (buyPrice <= 0)
+        {
+            return 0;
+        }
+
+        long low = buyPrice;
+        long high = Math.min((long) Integer.MAX_VALUE, (long) buyPrice + 5_000_000L);
+        if (high - calculateTaxPerItem((int) high, itemName) < buyPrice)
+        {
+            return 0;
+        }
+
+        while (low < high)
+        {
+            long middle = low + ((high - low) / 2L);
+            long netSellPrice = middle - calculateTaxPerItem((int) middle, itemName);
+            if (netSellPrice >= buyPrice)
+            {
+                high = middle;
+            }
+            else
+            {
+                low = middle + 1L;
+            }
+        }
+        return (int) low;
+    }
+
     private static final class InventoryLot
     {
         int quantity;
