@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.5
+# OSRS Flipper Sync v5.2.6
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -100,6 +100,14 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - nieuwe GE-orders bewaren de Wiki instabuy en instasell van het startmoment in de gedeelde slottoestand;
 - de timer stopt zodra een koop- of verkoopslot volledig gevuld is;
 - **Stats** bevat een accountbrede cashstackeditor; latere gesynchroniseerde GE-fills verhogen of verlagen hetzelfde serversaldo automatisch.
+
+## Oplossing in v5.2.6
+
+- De actuele blauwe marktprijsregels heten expliciet **Wiki instabuy** en **Wiki instasell**, zodat ze niet met de advies- of 1x1-testprijzen kunnen worden verward.
+- **Koop** gebruikt de hoogste beschikbare verkoopreferentie van **Wiki instasell** en **Last sell price**, plus één GP; **Verkoop** behoudt de bestaande prijsregel.
+- De vrije cashstack staat groot en goud naast het OSRS-munticoon; het invoerveld eronder blijft beschikbaar om het accountbrede saldo aan te passen.
+- De aanvullende regel **Winst per uur** is uit de Flip-kaarten verwijderd, zodat flipwaarde en de drie relevante prijsparen centraal staan.
+- In een geopend koopvenster worden **Koop**, **Wiki instasell** en **Last sell price** groter en vet weergegeven; in een verkoopvenster krijgen **Verkoop**, **Wiki instabuy** en **Last buy price** die nadruk.
 
 ## Configuratie
 

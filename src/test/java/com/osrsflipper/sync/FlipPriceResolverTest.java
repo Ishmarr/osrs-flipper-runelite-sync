@@ -15,11 +15,14 @@ public class FlipPriceResolverTest
     }
 
     @Test
-    public void confirmedPriceTestOverridesWikiPrices()
+    public void buyUsesTheHighestWikiOrPriceTestSellReference()
     {
         LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_700, 20, 21);
-        assertEquals(1_701, FlipPriceResolver.buyPrice(opportunity(), priceTest));
+        assertEquals(1_754, FlipPriceResolver.buyPrice(opportunity(), priceTest));
         assertEquals(1_899, FlipPriceResolver.sellPrice(opportunity(), priceTest));
+
+        LastTradePriceView higherPriceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
+        assertEquals(1_801, FlipPriceResolver.buyPrice(opportunity(), higherPriceTest));
     }
 
     private static RuneliteOverviewView.Opportunity opportunity()

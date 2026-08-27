@@ -10,6 +10,7 @@ import javax.swing.JPanel;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class PanelLayoutRegressionTest
 {
@@ -50,5 +51,23 @@ public class PanelLayoutRegressionTest
 
         assertEquals(13f, tabSize.getFloat(null), 0.001f);
         assertEquals(15f, detailSize.getFloat(null), 0.001f);
+    }
+
+    @Test
+    public void activeBuyOrSellPriceIsLargerAndBold() throws Exception
+    {
+        Method factory = OsrsFlipperSyncPanel.class.getDeclaredMethod(
+            "coloredMetric", String.class, String.class, java.awt.Color.class, boolean.class);
+        factory.setAccessible(true);
+        JPanel row = (JPanel) factory.invoke(null, "Koop", "19 647 GP", java.awt.Color.WHITE, true);
+        BorderLayout layout = (BorderLayout) row.getLayout();
+        JLabel label = (JLabel) layout.getLayoutComponent(BorderLayout.WEST);
+        JLabel value = (JLabel) layout.getLayoutComponent(BorderLayout.EAST);
+
+        assertEquals(17f, label.getFont().getSize2D(), 0.001f);
+        assertEquals(17f, value.getFont().getSize2D(), 0.001f);
+        assertTrue(label.getFont().isBold());
+        assertTrue(value.getFont().isBold());
+        assertEquals(31, row.getPreferredSize().height);
     }
 }

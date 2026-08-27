@@ -1,5 +1,6 @@
 package com.osrsflipper.sync;
 
+import net.runelite.api.GrandExchangeOfferState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -57,5 +58,25 @@ public class FocusedGeItemResolverTest
     public void hiddenWidgetsNeverLeakAStaleItem()
     {
         assertEquals(0, FocusedGeItemResolver.resolve(false, 2434, 11840, false, 4151, 1127));
+    }
+
+    @Test
+    public void setupTitleDeterminesTheActivePriceSide()
+    {
+        assertEquals("buy", FocusedGeItemResolver.resolveSide(
+            true, "<col=ff981f>Buy offer</col>", false, null));
+        assertEquals("sell", FocusedGeItemResolver.resolveSide(
+            true, "Grand Exchange: Set up Sell offer", false, null));
+    }
+
+    @Test
+    public void existingOfferStateDeterminesTheActivePriceSide()
+    {
+        assertEquals("buy", FocusedGeItemResolver.resolveSide(
+            false, "", true, GrandExchangeOfferState.BUYING));
+        assertEquals("sell", FocusedGeItemResolver.resolveSide(
+            false, "", true, GrandExchangeOfferState.SELLING));
+        assertEquals("", FocusedGeItemResolver.resolveSide(
+            false, "", true, GrandExchangeOfferState.EMPTY));
     }
 }
