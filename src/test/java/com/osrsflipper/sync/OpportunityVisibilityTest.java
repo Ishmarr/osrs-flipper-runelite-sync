@@ -19,7 +19,7 @@ public class OpportunityVisibilityTest
             "active", 1, 110, 111);
 
         List<RuneliteOverviewView.Opportunity> visible =
-            OsrsFlipperSyncPanel.visibleHourlyOpportunities(
+            OsrsFlipperSyncPanel.visibleCycleOpportunities(
                 Arrays.asList(first, second),
                 Collections.singletonList(activeBuy));
 
