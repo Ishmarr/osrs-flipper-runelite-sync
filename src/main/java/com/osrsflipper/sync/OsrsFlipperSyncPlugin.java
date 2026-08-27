@@ -5,15 +5,19 @@ import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import javax.inject.Inject;
 import javax.swing.JOptionPane;
@@ -39,6 +43,8 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.widgets.Widget;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.HttpUrl;
@@ -53,8 +59,8 @@ import org.slf4j.LoggerFactory;
 
 @PluginDescriptor(
     name = "OSRS Flipper Sync",
-    description = "Synchroniseert Grand Exchange-offers veilig met de OSRS Flip Tracker-webapp.",
-    tags = {"grand-exchange", "ge", "flip", "flipping", "sync"},
+    description = "Toont live GE-slots, persoonlijke flipkansen en webstatistieken en synchroniseert veilig met de webapp.",
+    tags = {"grand-exchange", "ge", "flip", "flipping", "prices", "profit", "sync"},
     enabledByDefault = true
 )
 public class OsrsFlipperSyncPlugin extends Plugin
@@ -62,8 +68,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.0.3";
+    private static final String PLUGIN_VERSION = "5.2.0";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
+    private static final String WIKI_USER_AGENT = USER_AGENT +
+        " (https://github.com/Ishmarr/osrs-flipper-runelite-sync)";
+    private static final String WIKI_LATEST_URL = "https://prices.runescape.wiki/api/v1/osrs/latest";
 
     private static final String PAIR_PATH = "/runelite-api/pair";
     private static final String STATUS_PATH = "/runelite-api/status";
@@ -71,18 +80,23 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final String SYNC_PATH = "/runelite-api/ge-slots/sync";
     private static final String SNAPSHOT_PATH = "/runelite-api/ge-slots/snapshot";
     private static final String STATE_PATH = "/runelite-api/ge-slots/state";
+    private static final String OVERVIEW_PATH = "/runelite-api/overview";
 
     private static final String STATE_PREFIX = "slotState_";
     private static final String OUTBOX_PREFIX = "outbox_";
     private static final String SNAPSHOT_SEQUENCE_PREFIX = "snapshotSequence_";
     private static final String PENDING_SNAPSHOT_PREFIX = "pendingSnapshot_";
+    private static final String LAST_TRADE_PRICES_PREFIX = "lastTradePrices_";
     private static final int SLOT_COUNT = 8;
     private static final int LOGIN_RECONCILE_TICKS = 8;
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
     private static final int HEARTBEAT_GAME_TICKS = 100;
     private static final int SERVER_STATE_GAME_TICKS = 200;
     private static final int FULL_SNAPSHOT_GAME_TICKS = 500;
+    private static final int MARKET_PRICE_GAME_TICKS = 100;
+    private static final int OVERVIEW_GAME_TICKS = 500;
     private static final int MAX_OUTBOX_SIZE = 500;
+    private static final long MARKET_PRICE_CACHE_SECONDS = 60L;
     private static final long RETRY_BASE_SECONDS = 5L;
     private static final long RETRY_MAX_SECONDS = 300L;
     private static final long NO_ACCOUNT = Long.MIN_VALUE;
@@ -116,6 +130,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private final Map<Integer, SlotSnapshot> slotSnapshots = new HashMap<>();
     private final Deque<QueuedEvent> outbox = new ArrayDeque<>();
+    private final Map<Integer, MarketPriceView> marketPrices = new HashMap<>();
+    private final Deque<Integer> marketPriceQueue = new ArrayDeque<>();
+    private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
+    private final SessionStatsTracker sessionStats = new SessionStatsTracker();
+    private final LastTradePriceBook lastTradePrices = new LastTradePriceBook();
+    private RuneliteOverviewView overview = RuneliteOverviewView.empty();
 
     private long activeAccountHash = NO_ACCOUNT;
     private boolean started;
@@ -137,6 +157,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int heartbeatTicks;
     private int serverStateTicks;
     private int fullSnapshotTicks;
+    private int marketPriceTicks;
     private long snapshotSequence;
     private int statusRetryAttempts;
     private long statusNextAttemptAt;
@@ -147,6 +168,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private long workerBackoffUntil;
     private String snapshotReason;
     private PendingSnapshot pendingSnapshot;
+    private boolean marketPriceInFlight;
+    private boolean overviewInFlight;
+    private boolean overviewRefreshPending;
+    private int overviewTicks;
+    private int forcedOverviewDelayTicks;
+    private int focusedGeItemId;
 
     @Provides
     OsrsFlipperSyncConfig provideConfig(ConfigManager manager)
@@ -179,9 +206,22 @@ public class OsrsFlipperSyncPlugin extends Plugin
         heartbeatTicks = HEARTBEAT_GAME_TICKS;
         serverStateTicks = SERVER_STATE_GAME_TICKS;
         fullSnapshotTicks = 0;
+        marketPriceTicks = MARKET_PRICE_GAME_TICKS;
+        marketPriceInFlight = false;
+        overviewInFlight = false;
+        overviewRefreshPending = false;
+        overviewTicks = OVERVIEW_GAME_TICKS;
+        forcedOverviewDelayTicks = 0;
+        focusedGeItemId = 0;
+        overview = RuneliteOverviewView.empty();
         snapshotSequence = 0;
         snapshotReason = "startup";
         pendingSnapshot = null;
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
+        sessionStats.reset();
+        lastTradePrices.clear();
         loginReconciliationPending = client.getGameState() == GameState.LOGGED_IN;
         geOpenReconciliationPending = false;
         loggedInTicks = 0;
@@ -191,6 +231,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         switchToCurrentAccount();
         updateInitialConnectionStatus();
         checkDeviceStatus();
+        requestOverview(false);
         flushOutboxIfPossible();
         LOG.info("OSRS Flipper Sync {} gestart", PLUGIN_VERSION);
     }
@@ -202,6 +243,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             clientToolbar.removeNavigation(navButton);
             navButton = null;
+        }
+        if (panel != null)
+        {
+            panel.dispose();
         }
         panel = null;
 
@@ -227,6 +272,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerBackoffUntil = 0;
         slotSnapshots.clear();
         outbox.clear();
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
+        marketPriceInFlight = false;
+        overviewInFlight = false;
+        overviewRefreshPending = false;
+        overviewTicks = 0;
+        forcedOverviewDelayTicks = 0;
+        focusedGeItemId = 0;
+        overview = RuneliteOverviewView.empty();
         activeAccountHash = NO_ACCOUNT;
         LOG.info("OSRS Flipper Sync gestopt");
     }
@@ -269,6 +324,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         switchToCurrentAccount();
+        updateFocusedGeItem();
 
         if (loginReconciliationPending)
         {
@@ -317,8 +373,26 @@ public class OsrsFlipperSyncPlugin extends Plugin
             reconcileAllSlots("periodic");
         }
 
+        marketPriceTicks++;
+        if (marketPriceTicks >= MARKET_PRICE_GAME_TICKS)
+        {
+            marketPriceTicks = 0;
+            requestMarketPrices(false);
+        }
+
+        overviewTicks++;
+        if (overviewTicks >= OVERVIEW_GAME_TICKS)
+        {
+            requestOverview(false);
+        }
+        if (forcedOverviewDelayTicks > 0 && --forcedOverviewDelayTicks == 0)
+        {
+            requestOverview(true);
+        }
+
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
+        flushMarketPriceQueue();
     }
 
     @Subscribe
@@ -353,7 +427,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
+        SlotSnapshot previous = slotSnapshots.get(event.getSlot() + 1);
+        String nextSide = sideFor(offer.getState());
+        boolean newOrRepricedOffer = nextSide != null && offer.getItemId() > 0 &&
+            (previous == null ||
+                previous.itemId != offer.getItemId() ||
+                !nextSide.equals(previous.side) ||
+                previous.price != offer.getPrice() ||
+                previous.totalQuantity != offer.getTotalQuantity());
         processOffer(event.getSlot(), offer, false);
+        if (newOrRepricedOffer)
+        {
+            // Geef de slotsync enkele game ticks om cash en buy limits eerst server-side te verwerken.
+            forcedOverviewDelayTicks = 3;
+        }
         flushOutboxIfPossible();
     }
 
@@ -387,10 +474,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void createSidePanel()
     {
         panel = new OsrsFlipperSyncPanel(
+            itemManager,
             this::beginInteractivePairing,
             this::requestManualResync,
-            this::openWebapp);
+            this::openWebapp,
+            () -> clientThread.invokeLater(() -> requestOverview(true)));
         panel.setConnectionStatus(config.connectionStatus());
+        refreshSidePanel();
 
         BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
         navButton = NavigationButton.builder()
@@ -585,7 +675,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
             LOG.info("RuneLite-apparaat gekoppeld aan {}", displayOwner(pair.owner_email));
             heartbeatTicks = HEARTBEAT_GAME_TICKS;
+            overviewTicks = OVERVIEW_GAME_TICKS;
             sendHeartbeat();
+            requestOverview(true);
             if (client.getGameState() == GameState.LOGGED_IN)
             {
                 reconcileAllSlots("paired");
@@ -691,6 +783,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             serverStateCheckPending = true;
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
+            overviewTicks = OVERVIEW_GAME_TICKS;
+            requestOverview(false);
             return;
         }
 
@@ -809,6 +903,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 processOffer(slot, offer, true);
             }
         }
+        refreshSidePanel();
+        requestMarketPrices(false);
         queueFullSnapshot(reason);
         persistCurrentAccount();
         flushOutboxIfPossible();
@@ -900,6 +996,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             next.endedAt = isTerminal(status) ? eventAt : 0;
             next.eventSequence = 1;
             next.lastEventAt = eventAt;
+            if ("buy".equals(side))
+            {
+                next.suggestedSellPrice = suggestedSellPriceFor(itemId);
+                next.suggestedSellPricePending = needsFreshSellPriceFor(itemId);
+            }
             eventType = eventTypeFor(side, status, true, previous, next);
         }
         else
@@ -925,9 +1026,35 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         next.fingerprint = fingerprint;
 
+        int previousFilled = sameOffer && previous != null ? previous.filledQuantity : 0;
+        int previousSpent = sameOffer && previous != null ? previous.spentAmount : 0;
+        String previousStatus = sameOffer && previous != null ? previous.status : null;
+        sessionStats.recordTransition(
+            next.itemId,
+            next.itemName,
+            next.side,
+            previousFilled,
+            previousSpent,
+            previousStatus,
+            next.filledQuantity,
+            next.spentAmount,
+            next.status,
+            next.price);
+        lastTradePrices.recordTransition(
+            next.itemId,
+            next.side,
+            previousFilled,
+            previousSpent,
+            next.filledQuantity,
+            next.spentAmount,
+            next.price,
+            next.lastEventAt);
+
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent(eventType));
         persistCurrentAccount();
+        refreshSidePanel();
+        queueMarketPrice(next.itemId, next.suggestedSellPricePending);
 
         debug("GE-slot {}: {} {} {}/{} @ {} ({}){}",
             slotNumber,
@@ -960,6 +1087,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent("slot_emptied"));
         persistCurrentAccount();
+        refreshSidePanel();
         debug("GE-slot {} leeggemaakt{}", slotNumber, reconciliation ? " [reconciliatie]" : "");
     }
 
@@ -1686,11 +1814,21 @@ public class OsrsFlipperSyncPlugin extends Plugin
         pendingSnapshot = null;
         snapshotSequence = 0;
         activeAccountHash = accountHash;
+        sessionStats.reset();
+        lastTradePrices.clear();
+        marketPrices.clear();
+        marketPriceQueue.clear();
+        queuedMarketPriceItems.clear();
+        overview = RuneliteOverviewView.empty();
+        overviewInFlight = false;
+        overviewTicks = OVERVIEW_GAME_TICKS;
         loadCurrentAccount();
         requestInFlight = false;
         snapshotPending = true;
         snapshotReason = "account_switch";
         serverStateCheckPending = true;
+        refreshSidePanel();
+        requestMarketPrices(false);
         debug("Accountstatus geladen voor hash {}", accountKey());
     }
 
@@ -1743,12 +1881,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 snapshotPending = true;
                 snapshotReason = isBlank(pendingSnapshot.reason) ? "retry" : pendingSnapshot.reason;
             }
+
+            String lastTradePricesJson = configManager.getConfiguration(
+                OsrsFlipperSyncConfig.GROUP, LAST_TRADE_PRICES_PREFIX + accountKey());
+            LastTradePriceBook.Entry[] lastTradeEntries = isBlank(lastTradePricesJson)
+                ? null
+                : gson.fromJson(lastTradePricesJson, LastTradePriceBook.Entry[].class);
+            lastTradePrices.restore(lastTradeEntries);
         }
         catch (RuntimeException exception)
         {
             LOG.error("Lokale GE-synchronisatiestatus kon niet worden gelezen", exception);
             slotSnapshots.clear();
             outbox.clear();
+            lastTradePrices.clear();
         }
     }
 
@@ -1777,6 +1923,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             OsrsFlipperSyncConfig.GROUP,
             PENDING_SNAPSHOT_PREFIX + accountKey(),
             pendingSnapshot == null ? "" : gson.toJson(pendingSnapshot));
+        configManager.setConfiguration(
+            OsrsFlipperSyncConfig.GROUP,
+            LAST_TRADE_PRICES_PREFIX + accountKey(),
+            gson.toJson(lastTradePrices.persistedEntries()));
     }
 
     private void clearStoredPairing(String status)
@@ -1817,6 +1967,365 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void setStoredValue(String key, String value)
     {
         configManager.setConfiguration(OsrsFlipperSyncConfig.GROUP, key, value == null ? "" : value);
+    }
+
+    private void refreshSidePanel()
+    {
+        if (panel == null)
+        {
+            return;
+        }
+
+        List<FlipperOfferView> offers = new ArrayList<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || "empty".equals(snapshot.status) || snapshot.itemId <= 0)
+            {
+                continue;
+            }
+            MarketPriceView market = marketPrices.get(snapshot.itemId);
+            offers.add(new FlipperOfferView(
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.itemName,
+                snapshot.side,
+                snapshot.price,
+                snapshot.totalQuantity,
+                snapshot.filledQuantity,
+                snapshot.status,
+                snapshot.startedAt,
+                snapshot.suggestedSellPrice,
+                market == null ? 0 : market.instantBuyPrice));
+        }
+        offers.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
+        panel.updateOffers(offers);
+        panel.updateOverview(overview);
+        panel.updateLastTradePrices(lastTradePrices.snapshot());
+    }
+
+    private void resetSessionStats()
+    {
+        sessionStats.reset();
+        refreshSidePanel();
+    }
+
+    private void requestOverview(boolean force)
+    {
+        if (!started || !hasDeviceToken())
+        {
+            return;
+        }
+        if (overviewInFlight)
+        {
+            if (force)
+            {
+                overviewRefreshPending = true;
+            }
+            return;
+        }
+
+        HttpUrl base = endpoint(OVERVIEW_PATH);
+        if (base == null)
+        {
+            return;
+        }
+
+        ZoneId zone = ZoneId.systemDefault();
+        LocalDate today = LocalDate.now(zone);
+        long dayStart = today.atStartOfDay(zone).toEpochSecond();
+        long monthStart = today.withDayOfMonth(1).atStartOfDay(zone).toEpochSecond();
+        HttpUrl.Builder url = base.newBuilder()
+            .addQueryParameter("day_start", Long.toString(dayStart))
+            .addQueryParameter("month_start", Long.toString(monthStart));
+        if (focusedGeItemId > 0)
+        {
+            url.addQueryParameter("focus_item_id", Integer.toString(focusedGeItemId));
+        }
+        if (force)
+        {
+            url.addQueryParameter("fresh", "1");
+        }
+
+        Request request = authorizedRequest(url.build()).get().build();
+        overviewInFlight = true;
+        overviewTicks = 0;
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            public void onFailure(Call call, IOException exception)
+            {
+                clientThread.invokeLater(() ->
+                {
+                    debug("RuneLite-kansen konden niet worden opgehaald: {}", exception.getMessage());
+                    finishOverviewRequest();
+                });
+            }
+
+            @Override
+            public void onResponse(Call call, Response response)
+            {
+                String body = readResponseBody(response);
+                int statusCode = response.code();
+                response.close();
+                clientThread.invokeLater(() -> handleOverviewResponse(statusCode, body));
+            }
+        });
+    }
+
+    private void handleOverviewResponse(int statusCode, String body)
+    {
+        if (statusCode == 401 || statusCode == 403)
+        {
+            overviewInFlight = false;
+            overviewRefreshPending = false;
+            clearStoredPairing("Koppeling ongeldig of ingetrokken; maak een nieuwe code");
+            return;
+        }
+        if (statusCode < 200 || statusCode >= 300)
+        {
+            debug("RuneLite-kansen kregen HTTP {}: {}", statusCode, abbreviate(body, 300));
+            finishOverviewRequest();
+            return;
+        }
+
+        try
+        {
+            OverviewResponse response = gson.fromJson(body, OverviewResponse.class);
+            if (response == null || !response.success)
+            {
+                throw new IllegalArgumentException("success ontbreekt");
+            }
+            overview = response.toView();
+            markWorkerSuccess();
+            if (panel != null)
+            {
+                panel.updateOverview(overview);
+            }
+        }
+        catch (RuntimeException exception)
+        {
+            debug("RuneLite-kansen konden niet worden gelezen: {}", exception.getMessage());
+        }
+        finally
+        {
+            finishOverviewRequest();
+        }
+    }
+
+    private void finishOverviewRequest()
+    {
+        overviewInFlight = false;
+        if (overviewRefreshPending)
+        {
+            overviewRefreshPending = false;
+            requestOverview(true);
+        }
+    }
+
+    private void updateFocusedGeItem()
+    {
+        Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+        Widget details = client.getWidget(InterfaceID.GeOffers.DETAILS);
+        boolean setupVisible = isVisible(setup);
+        boolean detailsVisible = isVisible(details);
+        int nextItemId = 0;
+        if (setupVisible || detailsVisible)
+        {
+            Widget itemWidget = client.getWidget(setupVisible
+                ? InterfaceID.GeOffers.SETUP_GRAPHIC4
+                : InterfaceID.GeOffers.DETAILS_GRAPHIC3);
+            if (itemWidget != null)
+            {
+                nextItemId = itemWidget.getItemId();
+            }
+            if (nextItemId <= 0)
+            {
+                nextItemId = client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH);
+            }
+            if (nextItemId <= 0)
+            {
+                nextItemId = client.getVarpValue(VarPlayerID.GE_LAST_OFFER_ITEM);
+            }
+        }
+        nextItemId = Math.max(0, nextItemId);
+        if (nextItemId == focusedGeItemId)
+        {
+            return;
+        }
+        focusedGeItemId = nextItemId;
+        if (panel != null)
+        {
+            panel.updateFocusedItem(focusedGeItemId);
+        }
+        if (focusedGeItemId > 0)
+        {
+            requestOverview(true);
+        }
+    }
+
+    private static boolean isVisible(Widget widget)
+    {
+        return widget != null && !widget.isHidden();
+    }
+
+    private int suggestedSellPriceFor(int itemId)
+    {
+        return SellTargetPriceResolver.provisional(
+            marketPrices.get(itemId),
+            overview.opportunityForItem(itemId));
+    }
+
+    private boolean needsFreshSellPriceFor(int itemId)
+    {
+        return SellTargetPriceResolver.needsFreshCapture(overview.opportunityForItem(itemId));
+    }
+
+    private void requestMarketPrices(boolean force)
+    {
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot != null && !"empty".equals(snapshot.status) && snapshot.itemId > 0)
+            {
+                queueMarketPrice(snapshot.itemId, force || snapshot.suggestedSellPricePending);
+            }
+        }
+        flushMarketPriceQueue();
+    }
+
+    private void queueMarketPrice(int itemId, boolean force)
+    {
+        if (itemId <= 0)
+        {
+            return;
+        }
+        MarketPriceView cached = marketPrices.get(itemId);
+        if (!force && cached != null && cached.fetchedAt + MARKET_PRICE_CACHE_SECONDS > now())
+        {
+            return;
+        }
+        if (queuedMarketPriceItems.add(itemId))
+        {
+            marketPriceQueue.addLast(itemId);
+        }
+    }
+
+    private void flushMarketPriceQueue()
+    {
+        if (!started || marketPriceInFlight)
+        {
+            return;
+        }
+        Integer itemId = marketPriceQueue.pollFirst();
+        if (itemId == null)
+        {
+            return;
+        }
+        queuedMarketPriceItems.remove(itemId);
+
+        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
+        if (base == null)
+        {
+            return;
+        }
+        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
+        Request request = new Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", WIKI_USER_AGENT)
+            .build();
+
+        marketPriceInFlight = true;
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            public void onFailure(Call call, IOException exception)
+            {
+                clientThread.invokeLater(() ->
+                {
+                    marketPriceInFlight = false;
+                    debug("Actuele Wiki-prijs voor item {} kon niet worden opgehaald: {}", itemId, exception.getMessage());
+                    flushMarketPriceQueue();
+                });
+            }
+
+            @Override
+            public void onResponse(Call call, Response response)
+            {
+                String body = readResponseBody(response);
+                int statusCode = response.code();
+                response.close();
+                clientThread.invokeLater(() -> handleMarketPriceResponse(itemId, statusCode, body));
+            }
+        });
+    }
+
+    private void handleMarketPriceResponse(int itemId, int statusCode, String body)
+    {
+        marketPriceInFlight = false;
+        if (statusCode >= 200 && statusCode < 300)
+        {
+            try
+            {
+                LatestPriceResponse response = gson.fromJson(body, LatestPriceResponse.class);
+                LatestPriceData row = response == null || response.data == null
+                    ? null
+                    : response.data.get(Integer.toString(itemId));
+                if (row != null)
+                {
+                    MarketPriceView market = new MarketPriceView(
+                        itemId,
+                        row.high,
+                        row.low,
+                        row.highTime,
+                        row.lowTime,
+                        now());
+                    marketPrices.put(itemId, market);
+                    capturePendingSellPrices(itemId, market);
+                    refreshSidePanel();
+                }
+            }
+            catch (RuntimeException exception)
+            {
+                debug("Actuele Wiki-prijs voor item {} kon niet worden gelezen: {}", itemId, exception.getMessage());
+            }
+        }
+        else
+        {
+            debug("Actuele Wiki-prijs voor item {} kreeg HTTP {}", itemId, statusCode);
+        }
+        flushMarketPriceQueue();
+    }
+
+    private void capturePendingSellPrices(int itemId, MarketPriceView market)
+    {
+        int capturedPrice = SellTargetPriceResolver.captured(market);
+        if (capturedPrice <= 0)
+        {
+            return;
+        }
+
+        boolean changed = false;
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || snapshot.itemId != itemId ||
+                !"buy".equals(snapshot.side) || "empty".equals(snapshot.status) ||
+                !snapshot.suggestedSellPricePending)
+            {
+                continue;
+            }
+            snapshot.suggestedSellPrice = capturedPrice;
+            snapshot.suggestedSellPricePending = false;
+            snapshot.suggestedSellPriceCapturedAt = market.instantBuyAt > 0
+                ? market.instantBuyAt
+                : market.fetchedAt;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            persistCurrentAccount();
+        }
     }
 
     private boolean hasDeviceToken()
@@ -2079,6 +2588,165 @@ public class OsrsFlipperSyncPlugin extends Plugin
         String error;
     }
 
+    private static final class OverviewResponse
+    {
+        boolean success;
+        long generated_at;
+        OpportunityLists opportunities;
+        OverviewStats stats;
+
+        RuneliteOverviewView toView()
+        {
+            List<RuneliteOverviewView.Opportunity> expected = opportunityViews(
+                opportunities == null ? null : opportunities.expected);
+            List<RuneliteOverviewView.Opportunity> hourly = opportunityViews(
+                opportunities == null ? null : opportunities.hourly);
+            return new RuneliteOverviewView(
+                expected,
+                hourly,
+                opportunities == null || opportunities.focus == null
+                    ? null
+                    : opportunities.focus.toView(),
+                periodView(stats == null ? null : stats.today),
+                periodView(stats == null ? null : stats.month),
+                periodView(stats == null ? null : stats.total),
+                generated_at);
+        }
+
+        private static List<RuneliteOverviewView.Opportunity> opportunityViews(List<OpportunityData> rows)
+        {
+            if (rows == null || rows.isEmpty())
+            {
+                return Collections.emptyList();
+            }
+            List<RuneliteOverviewView.Opportunity> result = new ArrayList<>();
+            for (OpportunityData row : rows)
+            {
+                if (row != null && row.item_id > 0)
+                {
+                    result.add(row.toView());
+                }
+            }
+            return result;
+        }
+
+        private static RuneliteOverviewView.PeriodStats periodView(PeriodStatsData row)
+        {
+            return row == null
+                ? RuneliteOverviewView.PeriodStats.empty()
+                : new RuneliteOverviewView.PeriodStats(
+                    row.realized_profit,
+                    row.roi_percent,
+                    row.profit_per_hour,
+                    row.ge_tax,
+                    row.trading_volume,
+                    row.completed_flips,
+                    periodItemViews(row.items));
+        }
+
+        private static List<RuneliteOverviewView.PeriodItem> periodItemViews(List<PeriodItemData> rows)
+        {
+            if (rows == null || rows.isEmpty())
+            {
+                return Collections.emptyList();
+            }
+            List<RuneliteOverviewView.PeriodItem> result = new ArrayList<>();
+            for (PeriodItemData row : rows)
+            {
+                if (row != null && row.item_id > 0 && row.realized_profit != 0)
+                {
+                    result.add(new RuneliteOverviewView.PeriodItem(
+                        row.item_id,
+                        row.item_name,
+                        row.realized_profit,
+                        row.completed_flips));
+                }
+            }
+            return result;
+        }
+    }
+
+    private static final class OpportunityLists
+    {
+        List<OpportunityData> expected;
+        List<OpportunityData> hourly;
+        OpportunityData focus;
+    }
+
+    private static final class OpportunityData
+    {
+        int item_id;
+        String item_name;
+        String ranking;
+        int buy_price;
+        int sell_price;
+        int instant_buy;
+        int instant_sell;
+        int expected_quantity;
+        long expected_profit;
+        int maximum_quantity;
+        long maximum_profit_per_hour;
+        long maximum_cycle_profit;
+        long price_updated_at;
+
+        RuneliteOverviewView.Opportunity toView()
+        {
+            return new RuneliteOverviewView.Opportunity(
+                item_id,
+                item_name,
+                ranking,
+                buy_price,
+                sell_price,
+                instant_buy,
+                instant_sell,
+                expected_quantity,
+                expected_profit,
+                maximum_quantity,
+                maximum_profit_per_hour,
+                maximum_cycle_profit,
+                price_updated_at);
+        }
+    }
+
+    private static final class OverviewStats
+    {
+        PeriodStatsData today;
+        PeriodStatsData month;
+        PeriodStatsData total;
+    }
+
+    private static final class PeriodStatsData
+    {
+        long realized_profit;
+        double roi_percent;
+        long profit_per_hour;
+        long ge_tax;
+        long trading_volume;
+        int completed_flips;
+        List<PeriodItemData> items;
+    }
+
+    private static final class PeriodItemData
+    {
+        int item_id;
+        String item_name;
+        long realized_profit;
+        int completed_flips;
+    }
+
+    private static final class LatestPriceResponse
+    {
+        Map<String, LatestPriceData> data;
+    }
+
+    private static final class LatestPriceData
+    {
+        int high;
+        int low;
+        long highTime;
+        long lowTime;
+    }
+
     private static final class SlotSnapshot
     {
         int slotNumber;
@@ -2097,6 +2765,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long lastEventAt;
         long serverVersion;
         String fingerprint;
+        int suggestedSellPrice;
+        boolean suggestedSellPricePending;
+        long suggestedSellPriceCapturedAt;
 
         SlotSnapshot copy()
         {
@@ -2117,6 +2788,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             copy.lastEventAt = lastEventAt;
             copy.serverVersion = serverVersion;
             copy.fingerprint = fingerprint;
+            copy.suggestedSellPrice = suggestedSellPrice;
+            copy.suggestedSellPricePending = suggestedSellPricePending;
+            copy.suggestedSellPriceCapturedAt = suggestedSellPriceCapturedAt;
             return copy;
         }
 

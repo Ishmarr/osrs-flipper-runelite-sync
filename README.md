@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.0.3
+# OSRS Flipper Sync v5.2.0
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -9,7 +9,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - bewaart tijdelijk niet-verzonden gebeurtenissen lokaal en probeert ze opnieuw;
 - stuurt periodieke volledige snapshots en heartbeats;
 - vergelijkt de lokale toestand met de server en herstelt verschillen automatisch;
-- biedt een RuneLite-zijpaneel met **Apparaat koppelen**, **Opnieuw synchroniseren** en **Webapp openen**;
+- biedt een compact RuneLite-zijpaneel met **Slots**, **Flips**, **Stats** en **Sync**;
+- toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;
+- bewaart bij de start van een geadviseerde kooporder het toenmalige verkoopdoel in het lokale slot;
+- toont uitsluitend de vijf hoogste volledige-cycluswinsten per uur;
+- toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
+- haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
+- toont per periode welke items de gerealiseerde winst en het verlies hebben veroorzaakt;
 - toont de actuele verbindingsstatus;
 - bevat optionele uitgebreide diagnose­logging.
 
@@ -33,6 +39,26 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 
 - de Gradle 9-build faalt niet meer wanneer `src/test` alleen de RuneLite-ontwikkelstarter bevat en geen JUnit-tests;
 - de lokale `build`-taak kan daardoor normaal afronden, terwijl de bestaande `run`-taak ongewijzigd blijft werken.
+
+## Nieuw in v5.1.0
+
+- **Prijzen** heet voortaan **Kansen** en gebruikt exact dezelfde persoonlijke berekening als de webscanner;
+- de top vijf verwachte winsten gebruikt het verwachte aantal en vereist strikt meer dan 100.000 GP verwachte winst;
+- de top vijf uurkansen toont het cash-, buy-limit- en snelheidsbegrensde aantal, GP/u en cycluswinst;
+- adviesprijzen en actuele instaprijzen staan in smalle verticale kaarten die binnen de RuneLite-zijbalk blijven;
+- een koopslot bevriest het verkoopdoel dat gold toen de order werd gestart;
+- **Stats** heeft een keuze tussen vandaag, deze maand en totaal en gebruikt de canonieke websitegegevens;
+- gerealiseerde deelwinst verschijnt al tijdens een nog lopende verkoop, terwijl **Totaal flips** uitsluitend afgeronde flips telt;
+- de tabbladen, statistiekwaarden en itemopbrengsten gebruiken grotere, leesbare tekst;
+- kansen en statistieken verversen normaal maximaal eens per vijf minuten; de knop in **Kansen** forceert een actuele herberekening.
+
+## Nieuw in v5.2.0
+
+- **Kansen** heet **Flips** en toont alleen nog de top vijf van maximale winst per volledige cyclusuur;
+- items die al in een actief GE-slot staan verdwijnen direct uit de normale lijst;
+- bij een geopend GE-item toont **Flips** tijdelijk alleen dat item met een vers scanneradvies;
+- een GE-actie veroorzaakt na de slotsync een gerichte extra refresh, zodat prijzen, cash en buy limits aansluiten op de website;
+- de dubbele scrollcontainer is verwijderd; elk tabblad heeft nu één werkende verticale scrollbar.
 
 ## Configuratie
 
