@@ -482,8 +482,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
         card.add(coloredMetric("Koop", priceOrDash(FlipPriceResolver.buyPrice(opportunity, lastTrade)), GOLD));
         card.add(coloredMetric("Verkoop", priceOrDash(FlipPriceResolver.sellPrice(opportunity, lastTrade)), GOLD));
-        card.add(coloredMetric("Nu instabuy", priceOrDash(opportunity.instantBuy), BLUE));
-        card.add(coloredMetric("Nu instasell", priceOrDash(opportunity.instantSell), BLUE));
+        card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE));
+        card.add(coloredMetric("Wiki instasell", priceOrDash(opportunity.instantSell), BLUE));
         if (lastTrade != null && lastTrade.lastBuyPrice > 0)
         {
             card.add(coloredMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice), PURPLE));
