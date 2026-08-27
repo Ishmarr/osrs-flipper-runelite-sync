@@ -348,9 +348,9 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         else
         {
             addOpportunitySection(
-                "Top winst per uur",
-                visibleHourlyOpportunities(overview.hourly, offers),
-                "Nog geen uitvoerbare uurflips.");
+                "Top flipwaarde",
+                visibleCycleOpportunities(overview.hourly, offers),
+                "Nog geen uitvoerbare flip met minstens 100k GP flipwaarde.");
         }
         if (overview.generatedAt > 0)
         {
@@ -401,7 +401,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         header.add(rankLabel, BorderLayout.EAST);
         card.add(header);
 
-        JLabel profit = new JLabel(formatGp(opportunity.maximumProfitPerHour) + "/u");
+        JLabel profit = new JLabel(formatGp(opportunity.maximumCycleProfit));
         profit.setForeground(GREEN);
         profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
         profit.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -422,11 +422,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             card.add(compactMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice)));
         }
-        card.add(compactMetric("Cycluswinst", formatGp(opportunity.maximumCycleProfit)));
+        card.add(compactMetric("Winst per uur", formatGp(opportunity.maximumProfitPerHour) + "/u"));
         return card;
     }
 
-    static List<RuneliteOverviewView.Opportunity> visibleHourlyOpportunities(
+    static List<RuneliteOverviewView.Opportunity> visibleCycleOpportunities(
         List<RuneliteOverviewView.Opportunity> opportunities,
         List<FlipperOfferView> activeOffers)
     {

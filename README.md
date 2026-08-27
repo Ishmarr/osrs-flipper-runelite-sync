@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.3
+# OSRS Flipper Sync v5.2.4
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -12,7 +12,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - biedt een compact RuneLite-zijpaneel met **Slots**, **Flips**, **Stats** en **Sync**;
 - toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;
 - bewaart bij de start van een geadviseerde kooporder het toenmalige verkoopdoel in het lokale slot;
-- toont uitsluitend de vijf hoogste volledige-cycluswinsten per uur;
+- toont uitsluitend de vijf grootste flipwaardes vanaf 100.000 GP per volledige koop-verkoopcyclus;
 - toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
 - haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
 - toont per periode welke items de gerealiseerde winst en het verlies hebben veroorzaakt;
@@ -80,6 +80,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - gewone flips, deelvullingen en losse één-itemorders kunnen de testprijzen niet meer overschrijven;
 - de koop moet binnen 30 seconden gevolgd worden door een lagere verkoopprijs, gelijk aan de classificatie van de webapp;
 - oude lokaal bewaarde prijzen uit gewone fills worden bij de upgrade niet opnieuw ingeladen.
+
+## Nieuw in v5.2.4
+
+- de Flips-tab rangschikt kandidaten op de grootste totale flipwaarde in plaats van op GP per uur;
+- alleen flipwaardes van minstens 100.000 GP verschijnen in de normale top;
+- flipwaarde is de grote groene hoofdwaarde op iedere kaart;
+- winst per uur blijft als aanvullende detailregel zichtbaar.
 
 ## Configuratie
 
