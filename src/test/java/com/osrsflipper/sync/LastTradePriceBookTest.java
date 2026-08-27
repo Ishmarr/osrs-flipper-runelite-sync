@@ -1,6 +1,7 @@
 package com.osrsflipper.sync;
 
 import java.util.Map;
+import java.util.Collections;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -82,5 +83,22 @@ public class LastTradePriceBookTest
         book.restore(new LastTradePriceBook.Entry[]{legacy});
 
         assertEquals(null, book.snapshot().get(404));
+    }
+
+    @Test
+    public void mergesNewestAccountwideServerPriceTestWithoutOverwritingNewerLocalData()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(505, 2_000, 1_900, 100, 101)));
+        assertEquals(2_000, book.snapshot().get(505).lastBuyPrice);
+
+        book.recordTransition(505, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 200);
+        book.recordTransition(505, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 201);
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(505, 2_000, 1_900, 100, 101)));
+
+        assertEquals(2_100, book.snapshot().get(505).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(505).lastSellPrice);
     }
 }

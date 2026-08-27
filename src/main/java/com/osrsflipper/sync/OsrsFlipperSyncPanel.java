@@ -18,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.function.LongConsumer;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -27,6 +28,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -44,6 +46,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color GREEN = new Color(95, 211, 133);
     private static final Color RED = new Color(230, 126, 118);
     private static final Color BLUE = new Color(102, 190, 235);
+    private static final Color PURPLE = new Color(202, 151, 235);
     private static final Color MUTED = new Color(170, 170, 170);
     private static final float DETAIL_FONT_SIZE = 15f;
     private static final float TAB_FONT_SIZE = 13f;
@@ -69,6 +72,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JLabel statsVolume = valueLabel("0 GP", Color.WHITE, DETAIL_FONT_SIZE);
     private final JLabel statsFlips = valueLabel("0", Color.WHITE, DETAIL_FONT_SIZE);
     private final JComboBox<PeriodChoice> statsPeriod = new JComboBox<>(PeriodChoice.values());
+    private final JComboBox<StatsSortChoice> statsSort = new JComboBox<>(StatsSortChoice.values());
+    private final JTextField cashInput = new JTextField();
+    private final JLabel cashReserved = valueLabel("0 GP gereserveerd", MUTED, 12f);
+    private final LongConsumer saveCashAction;
     private final Timer displayTimer;
 
     private List<FlipperOfferView> offers = Collections.emptyList();
@@ -81,10 +88,12 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         Runnable pairAction,
         Runnable syncAction,
         Runnable webappAction,
-        Runnable refreshOverviewAction)
+        Runnable refreshOverviewAction,
+        LongConsumer saveCashAction)
     {
         super(false);
         this.itemManager = itemManager;
+        this.saveCashAction = saveCashAction;
         setLayout(new BorderLayout(0, 7));
         setBorder(new EmptyBorder(7, 6, 7, 6));
 
@@ -156,6 +165,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         SwingUtilities.invokeLater(() ->
         {
             overview = nextOverview == null ? RuneliteOverviewView.empty() : nextOverview;
+            if (!cashInput.hasFocus())
+            {
+                cashInput.setText(formatNumber(overview.cash.available));
+            }
+            cashReserved.setText(formatGp(overview.cash.reserved) + " gereserveerd");
             rebuildOpportunities();
             rebuildStats();
         });
@@ -243,6 +257,33 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         statsPeriod.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         statsPeriod.addActionListener(event -> rebuildStats());
         page.add(statsPeriod);
+        page.add(Box.createVerticalStrut(4));
+
+        statsSort.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statsSort.setFont(statsSort.getFont().deriveFont(13f));
+        statsSort.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        statsSort.addActionListener(event -> rebuildStats());
+        page.add(statsSort);
+        page.add(Box.createVerticalStrut(7));
+
+        JPanel cash = cardPanel();
+        JLabel cashTitle = new JLabel("Vrije cashstack");
+        cashTitle.setFont(cashTitle.getFont().deriveFont(Font.BOLD));
+        cash.add(cashTitle);
+        cashInput.setFont(cashInput.getFont().deriveFont(14f));
+        cashInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        cashInput.setToolTipText("Vrije cash in GP; dit saldo wordt accountbreed bijgehouden");
+        cash.add(cashInput);
+        cash.add(Box.createVerticalStrut(3));
+        cashReserved.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cash.add(cashReserved);
+        JButton saveCash = new JButton("Cashstack opslaan");
+        saveCash.setAlignmentX(Component.LEFT_ALIGNMENT);
+        saveCash.addActionListener(event -> submitCash());
+        cashInput.addActionListener(event -> submitCash());
+        cash.add(Box.createVerticalStrut(4));
+        cash.add(saveCash);
+        page.add(cash);
         page.add(Box.createVerticalStrut(7));
 
         JPanel summary = cardPanel();
@@ -263,7 +304,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         page.add(statsItemsList);
 
         JLabel hint = wrapLabel(
-            "<small>Winst telt zodra items werkelijk verkocht zijn. Totaal flips telt alleen volledig afgeronde flips. Prijstests en eigen gebruik tellen niet mee.</small>",
+            "<small>Winst en totaal flips tellen zodra minstens één item werkelijk verkocht is, ook bij een nog lopende flip. Prijstests en eigen gebruik tellen niet mee.</small>",
             176);
         hint.setForeground(MUTED);
         hint.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -303,6 +344,35 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         diagnosticHint.setBorder(new EmptyBorder(8, 0, 0, 0));
         page.add(diagnosticHint);
         return page;
+    }
+
+    private void submitCash()
+    {
+        if (saveCashAction == null)
+        {
+            return;
+        }
+        String digits = cashInput.getText() == null
+            ? ""
+            : cashInput.getText().replaceAll("[^0-9]", "");
+        if (digits.isEmpty())
+        {
+            cashInput.setToolTipText("Vul een geldig cashsaldo in GP in");
+            return;
+        }
+        try
+        {
+            long value = Long.parseLong(digits);
+            if (value > Integer.MAX_VALUE)
+            {
+                throw new NumberFormatException("te groot");
+            }
+            saveCashAction.accept(value);
+        }
+        catch (NumberFormatException ignored)
+        {
+            cashInput.setToolTipText("Cashsaldo moet tussen 0 en 2.147.483.647 GP liggen");
+        }
     }
 
     private void rebuildSlots()
@@ -408,19 +478,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         profit.setBorder(new EmptyBorder(3, 0, 3, 0));
         card.add(profit);
 
-        card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
-        card.add(compactMetric("Koop", priceOrDash(opportunity.buyPrice)));
-        card.add(compactMetric("Verkoop", priceOrDash(opportunity.sellPrice)));
-        card.add(compactMetric("Nu instabuy", priceOrDash(opportunity.instantBuy)));
-        card.add(compactMetric("Nu instasell", priceOrDash(opportunity.instantSell)));
         LastTradePriceView lastTrade = lastTradePrices.get(opportunity.itemId);
+        card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
+        card.add(coloredMetric("Koop", priceOrDash(FlipPriceResolver.buyPrice(opportunity, lastTrade)), GOLD));
+        card.add(coloredMetric("Verkoop", priceOrDash(FlipPriceResolver.sellPrice(opportunity, lastTrade)), GOLD));
+        card.add(coloredMetric("Nu instabuy", priceOrDash(opportunity.instantBuy), BLUE));
+        card.add(coloredMetric("Nu instasell", priceOrDash(opportunity.instantSell), BLUE));
         if (lastTrade != null && lastTrade.lastBuyPrice > 0)
         {
-            card.add(compactMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice)));
+            card.add(coloredMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice), PURPLE));
         }
         if (lastTrade != null && lastTrade.lastSellPrice > 0)
         {
-            card.add(compactMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice)));
+            card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE));
         }
         card.add(compactMetric("Winst per uur", formatGp(opportunity.maximumProfitPerHour) + "/u"));
         return card;
@@ -474,13 +544,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void rebuildStatsItems(List<RuneliteOverviewView.PeriodItem> items)
     {
         statsItemsList.removeAll();
-        if (items == null || items.isEmpty())
+        StatsSortChoice selected = (StatsSortChoice) statsSort.getSelectedItem();
+        List<RuneliteOverviewView.PeriodItem> visible = visibleStatsItems(
+            items,
+            selected == StatsSortChoice.LOSS);
+        if (visible.isEmpty())
         {
-            statsItemsList.add(emptyMessage("Nog geen gerealiseerde itemopbrengst in deze periode."));
+            statsItemsList.add(emptyMessage(selected == StatsSortChoice.LOSS
+                ? "Nog geen gerealiseerd itemverlies in deze periode."
+                : "Nog geen gerealiseerde itemwinst in deze periode."));
         }
         else
         {
-            for (RuneliteOverviewView.PeriodItem item : items)
+            for (RuneliteOverviewView.PeriodItem item : visible)
             {
                 JPanel card = cardPanel();
                 card.add(itemHeader(item.itemId, item.itemName));
@@ -494,8 +570,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 if (item.completedFlips > 0)
                 {
                     JLabel count = new JLabel(item.completedFlips + (item.completedFlips == 1
-                        ? " voltooide flip"
-                        : " voltooide flips"));
+                        ? " flip met verkoop"
+                        : " flips met verkoop"));
                     count.setForeground(MUTED);
                     count.setFont(count.getFont().deriveFont(12f));
                     count.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -507,6 +583,35 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
         statsItemsList.revalidate();
         statsItemsList.repaint();
+    }
+
+    static List<RuneliteOverviewView.PeriodItem> visibleStatsItems(
+        List<RuneliteOverviewView.PeriodItem> items,
+        boolean losses)
+    {
+        List<RuneliteOverviewView.PeriodItem> visible = new ArrayList<>();
+        if (items != null)
+        {
+            for (RuneliteOverviewView.PeriodItem item : items)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+                if (losses && item.realizedProfit < 0)
+                {
+                    visible.add(item);
+                }
+                else if (!losses && item.realizedProfit > 0)
+                {
+                    visible.add(item);
+                }
+            }
+        }
+        visible.sort(losses
+            ? Comparator.comparingLong(item -> item.realizedProfit)
+            : Comparator.comparingLong((RuneliteOverviewView.PeriodItem item) -> item.realizedProfit).reversed());
+        return visible;
     }
 
     private JPanel itemHeader(int itemId, String itemName)
@@ -590,6 +695,17 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static JPanel compactMetric(String title, String value)
     {
         return metric(title, valueLabel(value, Color.WHITE, DETAIL_FONT_SIZE));
+    }
+
+    private static JPanel coloredMetric(String title, String value, Color color)
+    {
+        JPanel row = metric(title, valueLabel(value, color, DETAIL_FONT_SIZE));
+        Component label = ((BorderLayout) row.getLayout()).getLayoutComponent(BorderLayout.WEST);
+        if (label != null)
+        {
+            label.setForeground(color);
+        }
+        return row;
     }
 
     private static JLabel valueLabel(String text, Color color, float size)
@@ -746,6 +862,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 }
                 panel.add(wiki);
             }
+            if (offer.wikiInstantSellPrice > 0)
+            {
+                panel.add(compactMetric("Wiki instasell", priceOrDash(offer.wikiInstantSellPrice)));
+            }
             if ("buy".equals(offer.side) && offer.suggestedSellPrice > 0)
             {
                 JPanel target = compactMetric("Verkoopprijs", priceOrDash(offer.suggestedSellPrice));
@@ -771,7 +891,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
         void updateTime(long now)
         {
-            elapsed.setText(formatDuration(Math.max(0, now - offer.startedAt)));
+            long stopAt = offer.endedAt > 0
+                ? Math.max(offer.startedAt, offer.endedAt)
+                : now;
+            elapsed.setText(formatDuration(Math.max(0, stopAt - offer.startedAt)));
         }
     }
 
@@ -828,6 +951,25 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         PeriodChoice(String key, String label)
         {
             this.key = key;
+            this.label = label;
+        }
+
+        @Override
+        public String toString()
+        {
+            return label;
+        }
+    }
+
+    private enum StatsSortChoice
+    {
+        PROFIT("Meeste winst"),
+        LOSS("Meeste verlies");
+
+        final String label;
+
+        StatsSortChoice(String label)
+        {
             this.label = label;
         }
 

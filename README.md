@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.4
+# OSRS Flipper Sync v5.2.5
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -16,6 +16,9 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
 - haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
 - toont per periode welke items de gerealiseerde winst en het verlies hebben veroorzaakt;
+- laat die itemopbrengsten sorteren op **Meeste winst** of **Meeste verlies**;
+- deelt geldige 1x1-prijstesten en de cashstack accountbreed met alle gekoppelde pc's;
+- laat de beschikbare cashstack rechtstreeks in RuneLite instellen;
 - toont de actuele verbindingsstatus;
 - bevat optionele uitgebreide diagnose­logging.
 
@@ -87,6 +90,16 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - alleen flipwaardes van minstens 100.000 GP verschijnen in de normale top;
 - flipwaarde is de grote groene hoofdwaarde op iedere kaart;
 - winst per uur blijft als aanvullende detailregel zichtbaar.
+
+## Nieuw in v5.2.5
+
+- **Stats** heeft een filter voor **Meeste winst** en **Meeste verlies** en telt een flip zodra minstens één item werkelijk verkocht is;
+- geldige automatische 1x1-prijstesten worden uit de webapp opgehaald en op iedere gekoppelde pc als dezelfde prijsbron gebruikt;
+- prijsadvies gebruikt eerst de accountbrede 1x1-prijstest en valt zonder test terug op Wiki instasell plus één voor kopen en Wiki instabuy min één voor verkopen;
+- de drie prijsparen in **Flips** hebben een vast kleurpatroon: goud voor advies, blauw voor actuele Wiki-prijzen en paars voor de laatste 1x1-prijstest;
+- nieuwe GE-orders bewaren de Wiki instabuy en instasell van het startmoment in de gedeelde slottoestand;
+- de timer stopt zodra een koop- of verkoopslot volledig gevuld is;
+- **Stats** bevat een accountbrede cashstackeditor; latere gesynchroniseerde GE-fills verhogen of verlagen hetzelfde serversaldo automatisch.
 
 ## Configuratie
 

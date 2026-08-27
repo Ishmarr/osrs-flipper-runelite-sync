@@ -7,10 +7,10 @@ import static org.junit.Assert.assertEquals;
 public class SellTargetPriceResolverTest
 {
     @Test
-    public void usesExactLiveInstantBuyWithoutSubtractingOneGp()
+    public void pricesOneGpBelowLiveInstantBuy()
     {
         MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
-        assertEquals(1_829, SellTargetPriceResolver.captured(market));
+        assertEquals(1_828, SellTargetPriceResolver.captured(market));
     }
 
     @Test
@@ -18,7 +18,7 @@ public class SellTargetPriceResolverTest
     {
         MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
         RuneliteOverviewView.Opportunity opportunity = opportunity(1_900, 1_850);
-        assertEquals(1_850, SellTargetPriceResolver.provisional(market, opportunity));
+        assertEquals(1_828, SellTargetPriceResolver.provisional(market, opportunity));
         assertEquals(false, SellTargetPriceResolver.needsFreshCapture(opportunity));
     }
 
@@ -26,14 +26,14 @@ public class SellTargetPriceResolverTest
     public void usesScannerInstantBuyAndNotScannerAdvicePrice()
     {
         RuneliteOverviewView.Opportunity opportunity = opportunity(1_900, 1_850);
-        assertEquals(1_850, SellTargetPriceResolver.provisional(null, opportunity));
+        assertEquals(1_849, SellTargetPriceResolver.provisional(null, opportunity));
     }
 
     @Test
     public void requestsFreshPriceOnlyWhenNoScannerSnapshotExists()
     {
         MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
-        assertEquals(1_829, SellTargetPriceResolver.provisional(market, null));
+        assertEquals(1_828, SellTargetPriceResolver.provisional(market, null));
         assertEquals(true, SellTargetPriceResolver.needsFreshCapture(null));
     }
 
@@ -41,6 +41,17 @@ public class SellTargetPriceResolverTest
     public void returnsZeroWhenNoInstantBuyIsAvailable()
     {
         assertEquals(0, SellTargetPriceResolver.provisional(null, null));
+    }
+
+    @Test
+    public void confirmedPriceTestOverridesWikiAndScanner()
+    {
+        MarketPriceView market = new MarketPriceView(101, 1_829, 1_753, 10, 9, 11);
+        LastTradePriceView priceTest = new LastTradePriceView(101, 2_000, 1_700, 20, 21);
+        assertEquals(1_999, SellTargetPriceResolver.provisional(
+            market,
+            opportunity(1_900, 1_850),
+            priceTest));
     }
 
     private static RuneliteOverviewView.Opportunity opportunity(int sellPrice, int instantBuy)

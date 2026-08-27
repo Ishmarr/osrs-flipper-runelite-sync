@@ -12,6 +12,8 @@ final class RuneliteOverviewView
     final PeriodStats today;
     final PeriodStats month;
     final PeriodStats total;
+    final List<LastTradePriceView> priceTests;
+    final CashBalance cash;
     final long generatedAt;
 
     RuneliteOverviewView(
@@ -34,12 +36,31 @@ final class RuneliteOverviewView
         PeriodStats total,
         long generatedAt)
     {
+        this(expected, hourly, focus, today, month, total,
+            Collections.emptyList(), CashBalance.empty(), generatedAt);
+    }
+
+    RuneliteOverviewView(
+        List<Opportunity> expected,
+        List<Opportunity> hourly,
+        Opportunity focus,
+        PeriodStats today,
+        PeriodStats month,
+        PeriodStats total,
+        List<LastTradePriceView> priceTests,
+        CashBalance cash,
+        long generatedAt)
+    {
         this.expected = immutable(expected);
         this.hourly = immutable(hourly);
         this.focus = focus;
         this.today = today == null ? PeriodStats.empty() : today;
         this.month = month == null ? PeriodStats.empty() : month;
         this.total = total == null ? PeriodStats.empty() : total;
+        this.priceTests = Collections.unmodifiableList(new ArrayList<>(priceTests == null
+            ? Collections.emptyList()
+            : priceTests));
+        this.cash = cash == null ? CashBalance.empty() : cash;
         this.generatedAt = Math.max(0, generatedAt);
     }
 
@@ -206,6 +227,27 @@ final class RuneliteOverviewView
             this.itemName = itemName == null ? "" : itemName;
             this.realizedProfit = realizedProfit;
             this.completedFlips = Math.max(0, completedFlips);
+        }
+    }
+
+    static final class CashBalance
+    {
+        final long available;
+        final long reserved;
+        final long total;
+        final long updatedAt;
+
+        CashBalance(long available, long reserved, long total, long updatedAt)
+        {
+            this.available = Math.max(0, available);
+            this.reserved = Math.max(0, reserved);
+            this.total = Math.max(this.available + this.reserved, Math.max(0, total));
+            this.updatedAt = Math.max(0, updatedAt);
+        }
+
+        static CashBalance empty()
+        {
+            return new CashBalance(0, 0, 0, 0);
         }
     }
 }

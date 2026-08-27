@@ -16,7 +16,7 @@ public class OpportunityVisibilityTest
         RuneliteOverviewView.Opportunity second = opportunity(202);
         FlipperOfferView activeBuy = new FlipperOfferView(
             1, 101, "Item 101", "buy", 100, 10, 0,
-            "active", 1, 110, 111);
+            "active", 1, 0, 110, 111, 99);
 
         List<RuneliteOverviewView.Opportunity> visible =
             OsrsFlipperSyncPanel.visibleCycleOpportunities(
