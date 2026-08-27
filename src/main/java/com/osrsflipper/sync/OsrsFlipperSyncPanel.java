@@ -78,7 +78,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JComboBox<StatsSortChoice> statsSort = new JComboBox<>(StatsSortChoice.values());
     private final JLabel cashAvailable = valueLabel("0 GP", GOLD, 20f);
     private final JTextField cashInput = new JTextField();
-    private final JLabel cashReserved = valueLabel("0 GP gereserveerd", MUTED, 12f);
     private final LongConsumer saveCashAction;
     private final Timer displayTimer;
 
@@ -184,7 +183,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 cashInput.setText(formatNumber(overview.cash.available));
             }
             cashAvailable.setText(formatGp(overview.cash.available));
-            cashReserved.setText(formatGp(overview.cash.reserved) + " gereserveerd");
             rebuildOpportunities();
             rebuildStats();
         });
@@ -300,13 +298,23 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         cashHeadline.add(cashText, BorderLayout.CENTER);
         cash.add(cashHeadline);
         cash.add(Box.createVerticalStrut(6));
-        cashInput.setFont(cashInput.getFont().deriveFont(14f));
-        cashInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        JLabel cashInputTitle = new JLabel("Cashstack aanpassen (GP)");
+        cashInputTitle.setForeground(GOLD);
+        cashInputTitle.setFont(cashInputTitle.getFont().deriveFont(Font.BOLD, 14f));
+        cashInputTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cash.add(cashInputTitle);
+        cash.add(Box.createVerticalStrut(3));
+        cashInput.setFont(cashInput.getFont().deriveFont(Font.BOLD, 18f));
+        cashInput.setForeground(GOLD);
+        cashInput.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        cashInput.setHorizontalAlignment(SwingConstants.RIGHT);
+        cashInput.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(GOLD, 1),
+            new EmptyBorder(5, 7, 5, 7)));
+        cashInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        cashInput.setPreferredSize(new Dimension(180, 38));
         cashInput.setToolTipText("Vrije cash in GP; dit saldo wordt accountbreed bijgehouden");
         cash.add(cashInput);
-        cash.add(Box.createVerticalStrut(3));
-        cashReserved.setAlignmentX(Component.LEFT_ALIGNMENT);
-        cash.add(cashReserved);
         JButton saveCash = new JButton("Cashstack opslaan");
         saveCash.setAlignmentX(Component.LEFT_ALIGNMENT);
         saveCash.addActionListener(event -> submitCash());
@@ -440,10 +448,14 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         if (focusedItemId > 0)
         {
             RuneliteOverviewView.Opportunity focused = overview.opportunityForItem(focusedItemId);
+            if (focused == null)
+            {
+                focused = activeOfferOpportunity(focusedItemId, focusedOfferSide, offers);
+            }
             addOpportunitySection(
                 "Geselecteerde flip",
                 focused == null ? Collections.emptyList() : Collections.singletonList(focused),
-                "Dit geopende GE-item voldoet niet aan de actuele scannerregels.");
+                "Voor dit geopende item zijn nog geen scanner- of slotprijzen beschikbaar.");
         }
         else
         {
@@ -501,8 +513,12 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         header.add(rankLabel, BorderLayout.EAST);
         card.add(header);
 
-        JLabel profit = new JLabel(formatGp(opportunity.maximumCycleProfit));
-        profit.setForeground(GREEN);
+        boolean activeBuyOffer = "active_buy".equals(opportunity.ranking);
+        boolean activeSellOffer = "active_sell".equals(opportunity.ranking);
+        JLabel profit = new JLabel(activeBuyOffer
+            ? "Actief koopoffer"
+            : (activeSellOffer ? "Actief verkoopoffer" : formatGp(opportunity.maximumCycleProfit)));
+        profit.setForeground(activeSellOffer ? GOLD : GREEN);
         profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
         profit.setAlignmentX(Component.LEFT_ALIGNMENT);
         profit.setBorder(new EmptyBorder(3, 0, 3, 0));
@@ -526,6 +542,58 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE, buying));
         }
         return card;
+    }
+
+    static RuneliteOverviewView.Opportunity activeOfferOpportunity(
+        int itemId,
+        String side,
+        List<FlipperOfferView> activeOffers)
+    {
+        FlipperOfferView fallback = null;
+        if (activeOffers != null)
+        {
+            for (FlipperOfferView offer : activeOffers)
+            {
+                if (offer == null || offer.itemId != itemId)
+                {
+                    continue;
+                }
+                if (fallback == null)
+                {
+                    fallback = offer;
+                }
+                if (side != null && side.equals(offer.side))
+                {
+                    fallback = offer;
+                    break;
+                }
+            }
+        }
+        if (fallback == null)
+        {
+            return null;
+        }
+        boolean buy = "buy".equals(fallback.side);
+        int buyPrice = buy ? fallback.price : fallback.wikiInstantSellPrice;
+        int sellPrice = buy
+            ? (fallback.suggestedSellPrice > 0
+                ? fallback.suggestedSellPrice
+                : fallback.wikiInstantBuyPrice)
+            : fallback.price;
+        return new RuneliteOverviewView.Opportunity(
+            fallback.itemId,
+            fallback.itemName,
+            buy ? "active_buy" : "active_sell",
+            buyPrice,
+            sellPrice,
+            fallback.wikiInstantBuyPrice,
+            fallback.wikiInstantSellPrice,
+            fallback.totalQuantity,
+            0,
+            fallback.totalQuantity,
+            0,
+            0,
+            0);
     }
 
     static List<RuneliteOverviewView.Opportunity> visibleCycleOpportunities(

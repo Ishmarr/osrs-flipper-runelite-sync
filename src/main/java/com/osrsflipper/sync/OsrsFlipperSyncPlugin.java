@@ -69,7 +69,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.6";
+    private static final String PLUGIN_VERSION = "5.2.7";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
     private static final String WIKI_USER_AGENT = USER_AGENT +
         " (https://github.com/Ishmarr/osrs-flipper-runelite-sync)";
@@ -2082,11 +2082,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             url.addQueryParameter("focus_item_id", Integer.toString(focusedGeItemId));
         }
-        if (force)
-        {
-            url.addQueryParameter("fresh", "1");
-        }
-
         Request request = authorizedRequest(url.build()).get().build();
         overviewInFlight = true;
         overviewTicks = 0;
