@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.6
+# OSRS Flipper Sync v5.2.7
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -108,6 +108,11 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De vrije cashstack staat groot en goud naast het OSRS-munticoon; het invoerveld eronder blijft beschikbaar om het accountbrede saldo aan te passen.
 - De aanvullende regel **Winst per uur** is uit de Flip-kaarten verwijderd, zodat flipwaarde en de drie relevante prijsparen centraal staan.
 - In een geopend koopvenster worden **Koop**, **Wiki instasell** en **Last sell price** groter en vet weergegeven; in een verkoopvenster krijgen **Verkoop**, **Wiki instabuy** en **Last buy price** die nadruk.
+
+## Oplossing in v5.2.7
+
+- De cashstackeditor heeft een groter, vet en goud invoerveld; de afzonderlijke regel met gereserveerde cash is verwijderd.
+- Een geopend bestaand GE-offer blijft als geselecteerde flip zichtbaar via de lokale slotgegevens, ook wanneer het item niet meer in de actuele scannerselectie voorkomt.
 
 ## Configuratie
 
