@@ -54,6 +54,19 @@ public class SellTargetPriceResolverTest
             priceTest));
     }
 
+    @Test
+    public void keepsTheStrongestSellReferenceAndOnlyRaisesACapturedTarget()
+    {
+        MarketPriceView market = new MarketPriceView(101, 1_900, 1_700, 10, 9, 11);
+        LastTradePriceView lowerPriceTest = new LastTradePriceView(101, 1_850, 1_700, 20, 21);
+        assertEquals(1_899, SellTargetPriceResolver.provisional(
+            market,
+            opportunity(1_920, 1_800),
+            lowerPriceTest));
+        assertEquals(2_099, SellTargetPriceResolver.raiseOnly(2_099, 1_899));
+        assertEquals(2_199, SellTargetPriceResolver.raiseOnly(2_099, 2_199));
+    }
+
     private static RuneliteOverviewView.Opportunity opportunity(int sellPrice, int instantBuy)
     {
         return new RuneliteOverviewView.Opportunity(

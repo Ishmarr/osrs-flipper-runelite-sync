@@ -51,6 +51,22 @@ public class RuneliteOverviewViewTest
     }
 
     @Test
+    public void quantityEditorUsesTheSameCashLimitAndHourlyBoundedQuantityAsTheCard()
+    {
+        RuneliteOverviewView.Opportunity opportunity = opportunity(202, 2_250, 2_500);
+        RuneliteOverviewView view = new RuneliteOverviewView(
+            Collections.emptyList(),
+            Collections.singletonList(opportunity),
+            null,
+            null,
+            null,
+            1234);
+
+        assertEquals(20, view.maximumQuantityForItem(202));
+        assertEquals(0, view.maximumQuantityForItem(303));
+    }
+
+    @Test
     public void selectsTodayMonthAndTotalWithoutSharingMutableLists()
     {
         RuneliteOverviewView.PeriodStats today = new RuneliteOverviewView.PeriodStats(1, 2, 3, 4, 5, 6);

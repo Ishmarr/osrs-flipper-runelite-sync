@@ -78,8 +78,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.8";
+    private static final String PLUGIN_VERSION = "5.2.9";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
+    private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
     private static final String WIKI_USER_AGENT = USER_AGENT +
         " (https://github.com/Ishmarr/osrs-flipper-runelite-sync)";
@@ -434,7 +435,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             return;
         }
-        clientThread.invokeLater(this::showGePriceEditorSuggestion);
+        clientThread.invokeLater(() ->
+        {
+            showGePriceEditorSuggestion();
+            showGeQuantityEditorSuggestion();
+        });
     }
 
     @Subscribe
@@ -1031,6 +1036,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             captureStartMarketSnapshot(next);
             if ("buy".equals(side))
             {
+                next.suggestedBuyPrice = price;
                 next.suggestedSellPrice = suggestedSellPriceFor(itemId);
                 next.suggestedSellPricePending = needsFreshSellPriceFor(itemId);
             }
@@ -1040,6 +1046,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             next = previous.copy();
             next.itemName = itemName;
+            if ("buy".equals(side) && next.suggestedBuyPrice <= 0)
+            {
+                next.suggestedBuyPrice = price;
+            }
             next.filledQuantity = filledQuantity;
             next.spentAmount = spentAmount;
             next.status = status;
@@ -1726,6 +1736,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 local.startInstasellPrice = server.start_instasell_price;
             }
+            if (server.suggested_buy_price > 0)
+            {
+                local.suggestedBuyPrice = server.suggested_buy_price;
+            }
+            if (server.suggested_sell_price > 0)
+            {
+                local.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
+                    local.suggestedSellPrice,
+                    server.suggested_sell_price);
+            }
             local.eventSequence = Math.max(local.eventSequence, server.event_sequence);
             local.lastEventAt = Math.max(local.lastEventAt, server.last_event_at);
             local.fingerprint = fingerprint(local);
@@ -2051,6 +2071,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 snapshot.status,
                 snapshot.startedAt,
                 snapshot.endedAt,
+                snapshot.suggestedBuyPrice,
                 snapshot.suggestedSellPrice,
                 snapshot.startInstabuyPrice > 0
                     ? snapshot.startInstabuyPrice
@@ -2161,6 +2182,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 panel.updateOverview(overview);
                 panel.updateLastTradePrices(lastTradePrices.snapshot());
             }
+            // De focusrespons kan pas aankomen nadat het hoeveelheidsvenster
+            // al geopend is. Probeer de eigen klikregel dan meteen opnieuw.
+            showGeQuantityEditorSuggestion();
         }
         catch (RuntimeException exception)
         {
@@ -2337,7 +2361,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         priceSuggestion.setTextShadowed(true);
         priceSuggestion.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
         priceSuggestion.setOriginalX(10);
-        priceSuggestion.setOriginalY(36);
+        priceSuggestion.setOriginalY(firstAvailableEditorY(parent, priceSuggestion));
         priceSuggestion.setOriginalHeight(20);
         priceSuggestion.setXTextAlignment(WidgetTextAlignment.LEFT);
         priceSuggestion.setYTextAlignment(WidgetTextAlignment.CENTER);
@@ -2348,6 +2372,61 @@ public class OsrsFlipperSyncPlugin extends Plugin
         priceSuggestion.setOnMouseLeaveListener((JavaScriptCallback) ev -> priceSuggestion.setTextColor(0xFF981F));
         priceSuggestion.setOnOpListener((JavaScriptCallback) ev -> applyGePriceEditorPrice(selectedPrice));
         priceSuggestion.revalidate();
+    }
+
+    private void showGeQuantityEditorSuggestion()
+    {
+        Widget prompt = client.getWidget(InterfaceID.Chatbox.MES_TEXT);
+        Widget parent = client.getWidget(InterfaceID.Chatbox.MES_LAYER);
+        Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+        if (!isVisible(prompt) || parent == null || !isVisible(setup) ||
+            !"How many do you wish to buy?".equals(prompt.getText()))
+        {
+            return;
+        }
+
+        int itemId = Math.max(0, client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH));
+        if (itemId <= 0)
+        {
+            itemId = Math.max(0, focusedGeItemId);
+        }
+        int quantity = overview.maximumQuantityForItem(itemId);
+        if (quantity <= 0)
+        {
+            return;
+        }
+
+        // Prijs en hoeveelheid gebruiken bewust dezelfde dynamische regel.
+        // Daardoor blijft na een snelle wissel van editor nooit een oude regel
+        // onder de nieuwe staan.
+        Widget suggestion = findPriceEditorSuggestion(parent);
+        if (suggestion == null)
+        {
+            suggestion = parent.createChild(-1, WidgetType.TEXT);
+        }
+        final Widget quantitySuggestion = suggestion;
+        final int selectedQuantity = quantity;
+        quantitySuggestion.setText(QUANTITY_EDITOR_PREFIX +
+            String.format(java.util.Locale.US, "%,d", selectedQuantity));
+        quantitySuggestion.setTextColor(0xFF981F);
+        quantitySuggestion.setFontId(FontID.VERDANA_11_BOLD);
+        quantitySuggestion.setTextShadowed(true);
+        quantitySuggestion.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
+        quantitySuggestion.setOriginalX(10);
+        quantitySuggestion.setOriginalY(firstAvailableEditorY(parent, quantitySuggestion));
+        quantitySuggestion.setOriginalHeight(20);
+        quantitySuggestion.setXTextAlignment(WidgetTextAlignment.LEFT);
+        quantitySuggestion.setYTextAlignment(WidgetTextAlignment.CENTER);
+        quantitySuggestion.setWidthMode(WidgetSizeMode.MINUS);
+        quantitySuggestion.setHasListener(true);
+        quantitySuggestion.setAction(1, "Gebruik aanbevolen aantal");
+        quantitySuggestion.setOnMouseRepeatListener((JavaScriptCallback) ev ->
+            quantitySuggestion.setTextColor(0xFFFFFF));
+        quantitySuggestion.setOnMouseLeaveListener((JavaScriptCallback) ev ->
+            quantitySuggestion.setTextColor(0xFF981F));
+        quantitySuggestion.setOnOpListener((JavaScriptCallback) ev ->
+            applyGeEditorValue(selectedQuantity));
+        quantitySuggestion.revalidate();
     }
 
     private int gePriceEditorPrice(int itemId, String side)
@@ -2380,6 +2459,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static Widget findPriceEditorSuggestion(Widget parent)
     {
+        return findEditorSuggestion(parent, PRICE_EDITOR_PREFIX);
+    }
+
+    private static Widget findEditorSuggestion(Widget parent, String prefix)
+    {
         Widget[] children = parent.getDynamicChildren();
         if (children == null)
         {
@@ -2387,7 +2471,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         for (Widget child : children)
         {
-            if (child != null && child.getText() != null && child.getText().startsWith(PRICE_EDITOR_PREFIX))
+            if (child != null && child.getText() != null && child.getText().startsWith(prefix))
             {
                 return child;
             }
@@ -2395,14 +2479,56 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return null;
     }
 
+    private static int firstAvailableEditorY(Widget parent, Widget ownSuggestion)
+    {
+        // Y=4 plaatst onze hulpregel duidelijk boven de spelprompt. De ruimere
+        // lijst voorkomt de vroegere onveilige terugval naar een reeds bezette
+        // y=36 wanneer een andere plugin ook chatboxhulp toont.
+        int[] positions = {4, 20, 36, 52, 68, 84, 100};
+        Widget[] children = parent.getDynamicChildren();
+        if (children == null)
+        {
+            return positions[0];
+        }
+        for (int position : positions)
+        {
+            boolean occupied = false;
+            for (Widget child : children)
+            {
+                if (child == null || child == ownSuggestion || child.getText() == null || child.getText().isEmpty())
+                {
+                    continue;
+                }
+                int childTop = child.getOriginalY();
+                int childBottom = childTop + Math.max(14, child.getOriginalHeight());
+                int candidateBottom = position + 14;
+                if (position < childBottom && candidateBottom > childTop)
+                {
+                    occupied = true;
+                    break;
+                }
+            }
+            if (!occupied)
+            {
+                return position;
+            }
+        }
+        return positions[positions.length - 1] + 16;
+    }
+
     private void applyGePriceEditorPrice(int price)
+    {
+        applyGeEditorValue(price);
+    }
+
+    private void applyGeEditorValue(int value)
     {
         Widget input = client.getWidget(InterfaceID.Chatbox.MES_TEXT2);
         if (input != null)
         {
-            input.setText(price + "*");
+            input.setText(value + "*");
         }
-        client.setVarcStrValue(VarClientStr.INPUT_TEXT, Integer.toString(price));
+        client.setVarcStrValue(VarClientStr.INPUT_TEXT, Integer.toString(value));
     }
 
     private static boolean isVisible(Widget widget)
@@ -2637,7 +2763,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void capturePendingSellPrices(int itemId, MarketPriceView market)
     {
-        int capturedPrice = SellTargetPriceResolver.captured(market);
+        int capturedPrice = suggestedSellPriceFor(itemId);
         boolean changed = false;
         for (SlotSnapshot snapshot : slotSnapshots.values())
         {
@@ -2646,23 +2772,39 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 continue;
             }
+            boolean syncChanged = false;
             if (snapshot.startInstabuyPrice <= 0 && market.instantBuyPrice > 0)
             {
                 snapshot.startInstabuyPrice = market.instantBuyPrice;
-                changed = true;
+                syncChanged = true;
             }
             if (snapshot.startInstasellPrice <= 0 && market.instantSellPrice > 0)
             {
                 snapshot.startInstasellPrice = market.instantSellPrice;
-                changed = true;
+                syncChanged = true;
             }
-            if ("buy".equals(snapshot.side) && snapshot.suggestedSellPricePending && capturedPrice > 0)
+            if ("buy".equals(snapshot.side) && capturedPrice > snapshot.suggestedSellPrice)
             {
-                snapshot.suggestedSellPrice = capturedPrice;
-                snapshot.suggestedSellPricePending = false;
+                snapshot.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
+                    snapshot.suggestedSellPrice,
+                    capturedPrice);
                 snapshot.suggestedSellPriceCapturedAt = market.instantBuyAt > 0
                     ? market.instantBuyAt
                     : market.fetchedAt;
+                syncChanged = true;
+            }
+            if ("buy".equals(snapshot.side) &&
+                snapshot.suggestedSellPricePending && capturedPrice > 0)
+            {
+                snapshot.suggestedSellPricePending = false;
+                changed = true;
+            }
+            if (syncChanged)
+            {
+                snapshot.eventSequence = Math.max(1, snapshot.eventSequence + 1);
+                snapshot.lastEventAt = nextLogicalTime(snapshot.lastEventAt);
+                snapshot.fingerprint = fingerprint(snapshot);
+                enqueue(snapshot.toSyncEvent("guidance_updated"));
                 changed = true;
             }
         }
@@ -2807,7 +2949,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         return state.itemId + "|" + state.side + "|" + state.price + "|" +
             state.totalQuantity + "|" + state.filledQuantity + "|" + state.spentAmount + "|" + state.status + "|" +
-            state.offerId + "|" + state.startedAt + "|" + state.endedAt;
+            state.offerId + "|" + state.startedAt + "|" + state.endedAt + "|" +
+            state.startInstabuyPrice + "|" + state.startInstasellPrice + "|" +
+            state.suggestedBuyPrice + "|" + state.suggestedSellPrice;
     }
 
     private static long nextLogicalTime(long previous)
@@ -3174,6 +3318,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long lastEventAt;
         long serverVersion;
         String fingerprint;
+        int suggestedBuyPrice;
         int suggestedSellPrice;
         boolean suggestedSellPricePending;
         long suggestedSellPriceCapturedAt;
@@ -3199,6 +3344,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             copy.lastEventAt = lastEventAt;
             copy.serverVersion = serverVersion;
             copy.fingerprint = fingerprint;
+            copy.suggestedBuyPrice = suggestedBuyPrice;
             copy.suggestedSellPrice = suggestedSellPrice;
             copy.suggestedSellPricePending = suggestedSellPricePending;
             copy.suggestedSellPriceCapturedAt = suggestedSellPriceCapturedAt;
@@ -3229,6 +3375,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             event.knownServerVersion = Math.max(0, serverVersion);
             event.startInstabuyPrice = startInstabuyPrice;
             event.startInstasellPrice = startInstasellPrice;
+            event.suggestedBuyPrice = suggestedBuyPrice;
+            event.suggestedSellPrice = suggestedSellPrice;
             return event;
         }
 
@@ -3256,6 +3404,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             result.put("known_server_version", Math.max(0, serverVersion));
             result.put("start_instabuy_price", Math.max(0, startInstabuyPrice));
             result.put("start_instasell_price", Math.max(0, startInstasellPrice));
+            result.put("suggested_buy_price", Math.max(0, suggestedBuyPrice));
+            result.put("suggested_sell_price", Math.max(0, suggestedSellPrice));
             return result;
         }
     }
@@ -3281,6 +3431,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long knownServerVersion;
         int startInstabuyPrice;
         int startInstasellPrice;
+        int suggestedBuyPrice;
+        int suggestedSellPrice;
 
         Map<String, Object> toApiMap()
         {
@@ -3308,6 +3460,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             result.put("known_server_version", Math.max(0, knownServerVersion));
             result.put("start_instabuy_price", Math.max(0, startInstabuyPrice));
             result.put("start_instasell_price", Math.max(0, startInstasellPrice));
+            result.put("suggested_buy_price", Math.max(0, suggestedBuyPrice));
+            result.put("suggested_sell_price", Math.max(0, suggestedSellPrice));
             result.put("source", "automatic");
             return Collections.unmodifiableMap(result);
         }
@@ -3364,6 +3518,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long version;
         int start_instabuy_price;
         int start_instasell_price;
+        int suggested_buy_price;
+        int suggested_sell_price;
     }
 
     private static final class PendingSnapshot

@@ -18,16 +18,13 @@ final class SellTargetPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        if (priceTest != null && priceTest.lastBuyPrice > 0)
-        {
-            return Math.max(1, priceTest.lastBuyPrice - 1);
-        }
         int wikiPrice = market == null ? 0 : Math.max(0, market.instantBuyPrice);
         if (wikiPrice <= 0)
         {
             wikiPrice = scannerSnapshot(opportunity);
         }
-        return wikiPrice > 1 ? wikiPrice - 1 : wikiPrice;
+        int fallback = opportunity == null ? 0 : Math.max(0, opportunity.sellPrice);
+        return FlipPriceResolver.sellPrice(wikiPrice, fallback, priceTest);
     }
 
     static boolean needsFreshCapture(RuneliteOverviewView.Opportunity opportunity)
@@ -39,6 +36,11 @@ final class SellTargetPriceResolver
     {
         int wikiPrice = market == null ? 0 : Math.max(0, market.instantBuyPrice);
         return wikiPrice > 1 ? wikiPrice - 1 : wikiPrice;
+    }
+
+    static int raiseOnly(int currentPrice, int candidatePrice)
+    {
+        return Math.max(Math.max(0, currentPrice), Math.max(0, candidatePrice));
     }
 
     private static int scannerSnapshot(RuneliteOverviewView.Opportunity opportunity)
