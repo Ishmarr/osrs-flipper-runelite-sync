@@ -23,13 +23,17 @@ import javax.inject.Inject;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
+import net.runelite.api.FontID;
 import net.runelite.api.GameState;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
 import net.runelite.api.ItemComposition;
+import net.runelite.api.VarClientInt;
+import net.runelite.api.VarClientStr;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.api.events.VarClientIntChanged;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -45,7 +49,12 @@ import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetPositionMode;
+import net.runelite.api.widgets.WidgetSizeMode;
+import net.runelite.api.widgets.WidgetTextAlignment;
+import net.runelite.api.widgets.WidgetType;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.HttpUrl;
@@ -69,7 +78,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.7";
+    private static final String PLUGIN_VERSION = "5.2.8";
+    private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
     private static final String WIKI_USER_AGENT = USER_AGENT +
         " (https://github.com/Ishmarr/osrs-flipper-runelite-sync)";
@@ -414,6 +424,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             geOpenTicks = 0;
             debug("Grand Exchange geopend; volledige slotsynchronisatie wordt voorbereid");
         }
+    }
+
+    @Subscribe
+    public void onVarClientIntChanged(VarClientIntChanged event)
+    {
+        if (event.getIndex() != VarClientInt.INPUT_TYPE ||
+            client.getVarcIntValue(VarClientInt.INPUT_TYPE) != 7)
+        {
+            return;
+        }
+        clientThread.invokeLater(this::showGePriceEditorSuggestion);
     }
 
     @Subscribe
@@ -2276,6 +2297,112 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             requestOverview(true);
         }
+    }
+
+    private void showGePriceEditorSuggestion()
+    {
+        Widget prompt = client.getWidget(InterfaceID.Chatbox.MES_TEXT);
+        Widget parent = client.getWidget(InterfaceID.Chatbox.MES_LAYER);
+        Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+        if (!isVisible(prompt) || parent == null || !isVisible(setup) ||
+            !"Set a price for each item:".equals(prompt.getText()))
+        {
+            return;
+        }
+
+        int itemId = Math.max(0, client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH));
+        if (itemId <= 0)
+        {
+            itemId = Math.max(0, focusedGeItemId);
+        }
+        String side = FocusedGeItemResolver.resolveSide(true, widgetTreeText(setup), false, null);
+        int price = gePriceEditorPrice(itemId, side);
+        if (price <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
+        {
+            return;
+        }
+
+        Widget suggestion = findPriceEditorSuggestion(parent);
+        if (suggestion == null)
+        {
+            suggestion = parent.createChild(-1, WidgetType.TEXT);
+        }
+        final Widget priceSuggestion = suggestion;
+        final int selectedPrice = price;
+        String label = "buy".equals(side) ? "Koopprijs" : "Verkoopprijs";
+        priceSuggestion.setText(PRICE_EDITOR_PREFIX + label + ": " +
+            String.format(java.util.Locale.US, "%,d", selectedPrice) + " gp");
+        priceSuggestion.setTextColor(0xFF981F);
+        priceSuggestion.setFontId(FontID.VERDANA_11_BOLD);
+        priceSuggestion.setTextShadowed(true);
+        priceSuggestion.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
+        priceSuggestion.setOriginalX(10);
+        priceSuggestion.setOriginalY(36);
+        priceSuggestion.setOriginalHeight(20);
+        priceSuggestion.setXTextAlignment(WidgetTextAlignment.LEFT);
+        priceSuggestion.setYTextAlignment(WidgetTextAlignment.CENTER);
+        priceSuggestion.setWidthMode(WidgetSizeMode.MINUS);
+        priceSuggestion.setHasListener(true);
+        priceSuggestion.setAction(1, "Gebruik " + label.toLowerCase(java.util.Locale.ROOT));
+        priceSuggestion.setOnMouseRepeatListener((JavaScriptCallback) ev -> priceSuggestion.setTextColor(0xFFFFFF));
+        priceSuggestion.setOnMouseLeaveListener((JavaScriptCallback) ev -> priceSuggestion.setTextColor(0xFF981F));
+        priceSuggestion.setOnOpListener((JavaScriptCallback) ev -> applyGePriceEditorPrice(selectedPrice));
+        priceSuggestion.revalidate();
+    }
+
+    private int gePriceEditorPrice(int itemId, String side)
+    {
+        if (itemId <= 0)
+        {
+            return 0;
+        }
+        MarketPriceView market = marketPrices.get(itemId);
+        RuneliteOverviewView.Opportunity opportunity = overview.opportunityForItem(itemId);
+        LastTradePriceView priceTest = lastTradePrices.snapshot().get(itemId);
+        if ("buy".equals(side))
+        {
+            int wikiInstantSell = market != null && market.instantSellPrice > 0
+                ? market.instantSellPrice
+                : (opportunity == null ? 0 : opportunity.instantSell);
+            int fallbackBuyPrice = opportunity == null ? 0 : opportunity.buyPrice;
+            return FlipPriceResolver.buyPrice(wikiInstantSell, fallbackBuyPrice, priceTest);
+        }
+        if ("sell".equals(side))
+        {
+            int wikiInstantBuy = market != null && market.instantBuyPrice > 0
+                ? market.instantBuyPrice
+                : (opportunity == null ? 0 : opportunity.instantBuy);
+            int fallbackSellPrice = opportunity == null ? 0 : opportunity.sellPrice;
+            return FlipPriceResolver.sellPrice(wikiInstantBuy, fallbackSellPrice, priceTest);
+        }
+        return 0;
+    }
+
+    private static Widget findPriceEditorSuggestion(Widget parent)
+    {
+        Widget[] children = parent.getDynamicChildren();
+        if (children == null)
+        {
+            return null;
+        }
+        for (Widget child : children)
+        {
+            if (child != null && child.getText() != null && child.getText().startsWith(PRICE_EDITOR_PREFIX))
+            {
+                return child;
+            }
+        }
+        return null;
+    }
+
+    private void applyGePriceEditorPrice(int price)
+    {
+        Widget input = client.getWidget(InterfaceID.Chatbox.MES_TEXT2);
+        if (input != null)
+        {
+            input.setText(price + "*");
+        }
+        client.setVarcStrValue(VarClientStr.INPUT_TEXT, Integer.toString(price));
     }
 
     private static boolean isVisible(Widget widget)

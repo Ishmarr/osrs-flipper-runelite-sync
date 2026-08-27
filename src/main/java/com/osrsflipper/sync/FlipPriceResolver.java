@@ -11,28 +11,47 @@ final class FlipPriceResolver
         LastTradePriceView priceTest)
     {
         int wikiInstantSell = opportunity == null ? 0 : Math.max(0, opportunity.instantSell);
+        int fallbackBuyPrice = opportunity == null ? 0 : Math.max(0, opportunity.buyPrice);
+        return buyPrice(wikiInstantSell, fallbackBuyPrice, priceTest);
+    }
+
+    static int buyPrice(
+        int wikiInstantSell,
+        int fallbackBuyPrice,
+        LastTradePriceView priceTest)
+    {
+        wikiInstantSell = Math.max(0, wikiInstantSell);
         int lastSellPrice = priceTest == null ? 0 : Math.max(0, priceTest.lastSellPrice);
         int strongestSellReference = Math.max(wikiInstantSell, lastSellPrice);
         if (strongestSellReference > 0)
         {
             return plusOne(strongestSellReference);
         }
-        return opportunity == null ? 0 : Math.max(0, opportunity.buyPrice);
+        return Math.max(0, fallbackBuyPrice);
     }
 
     static int sellPrice(
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        if (priceTest != null && priceTest.lastBuyPrice > 0)
+        int wikiInstantBuy = opportunity == null ? 0 : Math.max(0, opportunity.instantBuy);
+        int fallbackSellPrice = opportunity == null ? 0 : Math.max(0, opportunity.sellPrice);
+        return sellPrice(wikiInstantBuy, fallbackSellPrice, priceTest);
+    }
+
+    static int sellPrice(
+        int wikiInstantBuy,
+        int fallbackSellPrice,
+        LastTradePriceView priceTest)
+    {
+        wikiInstantBuy = Math.max(0, wikiInstantBuy);
+        int lastBuyPrice = priceTest == null ? 0 : Math.max(0, priceTest.lastBuyPrice);
+        int strongestBuyReference = Math.max(wikiInstantBuy, lastBuyPrice);
+        if (strongestBuyReference > 0)
         {
-            return minusOne(priceTest.lastBuyPrice);
+            return minusOne(strongestBuyReference);
         }
-        if (opportunity != null && opportunity.instantBuy > 0)
-        {
-            return minusOne(opportunity.instantBuy);
-        }
-        return opportunity == null ? 0 : Math.max(0, opportunity.sellPrice);
+        return Math.max(0, fallbackSellPrice);
     }
 
     private static int plusOne(int value)

@@ -315,11 +315,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         cashInput.setPreferredSize(new Dimension(180, 38));
         cashInput.setToolTipText("Vrije cash in GP; dit saldo wordt accountbreed bijgehouden");
         cash.add(cashInput);
-        JButton saveCash = new JButton("Cashstack opslaan");
+        JButton saveCash = primaryActionButton("Cashstack opslaan");
         saveCash.setAlignmentX(Component.LEFT_ALIGNMENT);
         saveCash.addActionListener(event -> submitCash());
         cashInput.addActionListener(event -> submitCash());
-        cash.add(Box.createVerticalStrut(4));
+        cash.add(Box.createVerticalStrut(7));
         cash.add(saveCash);
         page.add(cash);
         page.add(Box.createVerticalStrut(7));
@@ -341,13 +341,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         page.add(itemsHeading);
         page.add(statsItemsList);
 
-        JLabel hint = wrapLabel(
-            "<small>Winst en totaal flips tellen zodra minstens één item werkelijk verkocht is, ook bij een nog lopende flip. Prijstests en eigen gebruik tellen niet mee.</small>",
-            176);
-        hint.setForeground(MUTED);
-        hint.setAlignmentX(Component.LEFT_ALIGNMENT);
-        hint.setBorder(new EmptyBorder(7, 0, 0, 0));
-        page.add(hint);
         return page;
     }
 
@@ -541,7 +534,33 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE, buying));
         }
+        int buyPrice = FlipPriceResolver.buyPrice(opportunity, lastTrade);
+        if (focusedCard && buyPrice > 0)
+        {
+            int lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+                buyPrice,
+                opportunity.itemName);
+            card.add(coloredMetric("Lowest price", priceOrDash(lowestPrice), GOLD, selling));
+        }
         return card;
+    }
+
+    private static JButton primaryActionButton(String text)
+    {
+        JButton button = new JButton(text);
+        button.setFont(button.getFont().deriveFont(Font.BOLD, 15f));
+        button.setForeground(ColorScheme.DARKER_GRAY_COLOR);
+        button.setBackground(GOLD);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setFocusPainted(false);
+        button.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(255, 211, 111), 1),
+            new EmptyBorder(8, 12, 8, 12)));
+        button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        button.setPreferredSize(new Dimension(180, 40));
+        button.setToolTipText("Klik om de vrije cashstack accountbreed op te slaan");
+        return button;
     }
 
     static RuneliteOverviewView.Opportunity activeOfferOpportunity(
