@@ -104,6 +104,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 ## Oplossing in v5.2.6
 
 - De actuele blauwe marktprijsregels heten expliciet **Wiki instabuy** en **Wiki instasell**, zodat ze niet met de advies- of 1x1-testprijzen kunnen worden verward.
+- **Koop** gebruikt de hoogste beschikbare verkoopreferentie van **Wiki instasell** en **Last sell price**, plus één GP; **Verkoop** behoudt de bestaande prijsregel.
 
 ## Configuratie
 

@@ -10,13 +10,12 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        if (priceTest != null && priceTest.lastSellPrice > 0)
+        int wikiInstantSell = opportunity == null ? 0 : Math.max(0, opportunity.instantSell);
+        int lastSellPrice = priceTest == null ? 0 : Math.max(0, priceTest.lastSellPrice);
+        int strongestSellReference = Math.max(wikiInstantSell, lastSellPrice);
+        if (strongestSellReference > 0)
         {
-            return plusOne(priceTest.lastSellPrice);
-        }
-        if (opportunity != null && opportunity.instantSell > 0)
-        {
-            return plusOne(opportunity.instantSell);
+            return plusOne(strongestSellReference);
         }
         return opportunity == null ? 0 : Math.max(0, opportunity.buyPrice);
     }
