@@ -2135,7 +2135,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             setupItem == null ? 0 : setupItem.getItemId(),
             setupVisible ? client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH) : 0,
             detailsVisible,
-            detailsItem == null ? 0 : detailsItem.getItemId());
+            detailsItem == null ? 0 : detailsItem.getItemId(),
+            detailsVisible ? client.getVarpValue(VarPlayerID.GE_LAST_OFFER_ITEM) : 0);
         if (nextItemId == focusedGeItemId)
         {
             return;

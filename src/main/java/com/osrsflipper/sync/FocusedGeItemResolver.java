@@ -11,7 +11,8 @@ final class FocusedGeItemResolver
         int setupItemId,
         int searchedItemId,
         boolean detailsVisible,
-        int detailsItemId)
+        int detailsItemId,
+        int lastOfferItemId)
     {
         if (setupVisible && setupItemId > 0)
         {
@@ -24,6 +25,10 @@ final class FocusedGeItemResolver
         if (detailsVisible && detailsItemId > 0)
         {
             return detailsItemId;
+        }
+        if (detailsVisible && lastOfferItemId > 0)
+        {
+            return lastOfferItemId;
         }
         return 0;
     }
