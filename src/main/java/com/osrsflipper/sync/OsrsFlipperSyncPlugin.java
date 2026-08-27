@@ -43,6 +43,7 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -2132,6 +2133,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         int nextItemId = FocusedGeItemResolver.resolve(
             setupVisible,
             setupItem == null ? 0 : setupItem.getItemId(),
+            setupVisible ? client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH) : 0,
             detailsVisible,
             detailsItem == null ? 0 : detailsItem.getItemId());
         if (nextItemId == focusedGeItemId)
