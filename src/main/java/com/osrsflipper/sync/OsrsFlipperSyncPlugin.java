@@ -2198,11 +2198,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
         int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
-        if (offers == null || selectedSlot < 0 || selectedSlot >= offers.length)
+        int offerIndex = FocusedGeItemResolver.selectedOfferIndex(
+            selectedSlot,
+            offers == null ? 0 : offers.length);
+        if (offerIndex < 0)
         {
             return 0;
         }
-        GrandExchangeOffer offer = offers[selectedSlot];
+        GrandExchangeOffer offer = offers[offerIndex];
         return offer == null || offer.getState() == GrandExchangeOfferState.EMPTY
             ? 0
             : Math.max(0, offer.getItemId());

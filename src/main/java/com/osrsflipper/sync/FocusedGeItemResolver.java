@@ -22,14 +22,20 @@ final class FocusedGeItemResolver
         {
             return searchedItemId;
         }
-        if (detailsVisible && detailsItemId > 0)
-        {
-            return detailsItemId;
-        }
         if (detailsVisible && selectedOfferItemId > 0)
         {
             return selectedOfferItemId;
         }
+        if (detailsVisible && detailsItemId > 0)
+        {
+            return detailsItemId;
+        }
         return 0;
+    }
+
+    static int selectedOfferIndex(int selectedSlot, int offerCount)
+    {
+        int index = selectedSlot - 1;
+        return index >= 0 && index < offerCount ? index : -1;
     }
 }

@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.1
+# OSRS Flipper Sync v5.2.2
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -66,6 +66,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - alleen het actuele item uit een zichtbaar koop-, verkoop- of detailscherm mag de lijst tijdelijk op één item focussen; bij een koopselectie gebruikt de plugin RuneLites actuele zoekitem omdat het itemicoon daar nog leeg kan zijn;
 - een geopend bestaand offer leest het item rechtstreeks uit RuneLites actuele geselecteerde GE-slot en controleert alle detailswidgets;
 - verouderde RuneScape-zoek- en laatste-offervariabelen kunnen daardoor geen oud item meer als geselecteerd tonen.
+
+## Oplossing in v5.2.2
+
+- RuneLites één-gebaseerde geselecteerde GE-slot wordt expliciet naar de nul-gebaseerde offer-array vertaald, inclusief de grensslots 1 en 8;
+- het offer uit het geselecteerde slot krijgt voorrang op mogelijk verouderde itemwaarden in detailswidgets;
+- een bestaand offer toont daardoor altijd het item uit het werkelijk geopende slot, terwijl een leeg slot de gewone lijst behoudt;
+- de Worker levert het gerichte item als informatieve detailrij, ook wanneer het niet in de actuele scannerselectie valt.
 
 ## Configuratie
 
