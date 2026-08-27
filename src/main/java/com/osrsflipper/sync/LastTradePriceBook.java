@@ -132,6 +132,39 @@ final class LastTradePriceBook
         return result;
     }
 
+    void mergeAuthoritative(Iterable<LastTradePriceView> serverEntries)
+    {
+        if (serverEntries == null)
+        {
+            return;
+        }
+        for (LastTradePriceView server : serverEntries)
+        {
+            if (server == null || server.itemId <= 0 ||
+                server.lastBuyPrice <= 0 || server.lastSellPrice <= 0)
+            {
+                continue;
+            }
+            Entry local = entries.get(server.itemId);
+            long serverAt = Math.max(server.lastBuyAt, server.lastSellAt);
+            long localAt = local == null ? 0 : Math.max(local.lastBuyAt, local.lastSellAt);
+            if (local != null && localAt > serverAt)
+            {
+                continue;
+            }
+            Entry merged = local == null ? new Entry() : local;
+            merged.itemId = server.itemId;
+            merged.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
+            merged.lastBuyPrice = server.lastBuyPrice;
+            merged.lastSellPrice = server.lastSellPrice;
+            merged.lastBuyAt = server.lastBuyAt;
+            merged.lastSellAt = server.lastSellAt;
+            clearPending(merged);
+            entries.put(server.itemId, merged);
+        }
+        trimOldest();
+    }
+
     List<Entry> persistedEntries()
     {
         return new ArrayList<>(entries.values());

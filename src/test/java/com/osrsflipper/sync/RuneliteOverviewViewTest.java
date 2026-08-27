@@ -79,6 +79,23 @@ public class RuneliteOverviewViewTest
         assertThrows(UnsupportedOperationException.class, () -> stats.items.clear());
     }
 
+    @Test
+    public void carriesAccountwidePriceTestsAndCash()
+    {
+        LastTradePriceView price = new LastTradePriceView(573, 2_000, 1_800, 10, 11);
+        RuneliteOverviewView.CashBalance cash = new RuneliteOverviewView.CashBalance(
+            1_000_000, 250_000, 1_250_000, 20);
+        RuneliteOverviewView view = new RuneliteOverviewView(
+            Collections.emptyList(), Collections.emptyList(), null,
+            null, null, null,
+            Collections.singletonList(price), cash, 99);
+
+        assertEquals(2_000, view.priceTests.get(0).lastBuyPrice);
+        assertEquals(1_000_000, view.cash.available);
+        assertEquals(1_250_000, view.cash.total);
+        assertThrows(UnsupportedOperationException.class, () -> view.priceTests.clear());
+    }
+
     private static RuneliteOverviewView.Opportunity opportunity(int itemId, int buyPrice, int sellPrice)
     {
         return new RuneliteOverviewView.Opportunity(
