@@ -33,7 +33,7 @@ public class FocusedGeItemResolverTest
     }
 
     @Test
-    public void existingOfferFallsBackToTheCurrentLastOfferItem()
+    public void existingOfferUsesTheItemFromTheSelectedSlot()
     {
         assertEquals(4151, FocusedGeItemResolver.resolve(false, 0, 0, true, 0, 4151));
     }

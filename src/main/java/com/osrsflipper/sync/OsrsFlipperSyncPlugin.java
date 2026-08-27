@@ -44,6 +44,7 @@ import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -2127,16 +2128,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
         Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
         Widget details = client.getWidget(InterfaceID.GeOffers.DETAILS);
         boolean setupVisible = isVisible(setup);
-        boolean detailsVisible = isVisible(details);
         Widget setupItem = client.getWidget(InterfaceID.GeOffers.SETUP_GRAPHIC4);
-        Widget detailsItem = client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC3);
+        Widget[] detailsWidgets = new Widget[] {
+            details,
+            client.getWidget(InterfaceID.GeOffers.DETAILS_DESC),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_MARKETPRICE),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_FEE),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC3),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC4),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC5),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC6),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_STATUS),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_COLLECT),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_MODIFY)
+        };
+        boolean detailsVisible = anyVisible(detailsWidgets);
         int nextItemId = FocusedGeItemResolver.resolve(
             setupVisible,
             setupItem == null ? 0 : setupItem.getItemId(),
             setupVisible ? client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH) : 0,
             detailsVisible,
-            detailsItem == null ? 0 : detailsItem.getItemId(),
-            detailsVisible ? client.getVarpValue(VarPlayerID.GE_LAST_OFFER_ITEM) : 0);
+            firstItemId(detailsWidgets),
+            detailsVisible ? selectedGeOfferItemId() : 0);
         if (nextItemId == focusedGeItemId)
         {
             return;
@@ -2155,6 +2168,44 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static boolean isVisible(Widget widget)
     {
         return widget != null && !widget.isHidden();
+    }
+
+    private static boolean anyVisible(Widget[] widgets)
+    {
+        for (Widget widget : widgets)
+        {
+            if (isVisible(widget))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int firstItemId(Widget[] widgets)
+    {
+        for (Widget widget : widgets)
+        {
+            if (isVisible(widget) && widget.getItemId() > 0)
+            {
+                return widget.getItemId();
+            }
+        }
+        return 0;
+    }
+
+    private int selectedGeOfferItemId()
+    {
+        GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
+        if (offers == null || selectedSlot < 0 || selectedSlot >= offers.length)
+        {
+            return 0;
+        }
+        GrandExchangeOffer offer = offers[selectedSlot];
+        return offer == null || offer.getState() == GrandExchangeOfferState.EMPTY
+            ? 0
+            : Math.max(0, offer.getItemId());
     }
 
     private int suggestedSellPriceFor(int itemId)
