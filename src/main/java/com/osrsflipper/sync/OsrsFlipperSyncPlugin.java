@@ -177,6 +177,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int overviewTicks;
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
+    private String focusedGeSide;
 
     @Provides
     OsrsFlipperSyncConfig provideConfig(ConfigManager manager)
@@ -218,6 +219,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewTicks = OVERVIEW_GAME_TICKS;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
+        focusedGeSide = "";
         overview = RuneliteOverviewView.empty();
         snapshotSequence = 0;
         snapshotReason = "startup";
@@ -288,6 +290,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewTicks = 0;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
+        focusedGeSide = "";
         overview = RuneliteOverviewView.empty();
         activeAccountHash = NO_ACCOUNT;
         LOG.info("OSRS Flipper Sync gestopt");
@@ -2248,23 +2251,33 @@ public class OsrsFlipperSyncPlugin extends Plugin
             client.getWidget(InterfaceID.GeOffers.DETAILS_MODIFY)
         };
         boolean detailsVisible = anyVisible(detailsWidgets);
+        GrandExchangeOffer selectedOffer = detailsVisible ? selectedGeOffer() : null;
         int nextItemId = FocusedGeItemResolver.resolve(
             setupVisible,
             setupItem == null ? 0 : setupItem.getItemId(),
             setupVisible ? client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH) : 0,
             detailsVisible,
             firstItemId(detailsWidgets),
-            detailsVisible ? selectedGeOfferItemId() : 0);
-        if (nextItemId == focusedGeItemId)
+            selectedOfferItemId(selectedOffer));
+        String nextSide = nextItemId <= 0
+            ? ""
+            : FocusedGeItemResolver.resolveSide(
+                setupVisible,
+                widgetTreeText(setup),
+                detailsVisible,
+                selectedOffer == null ? null : selectedOffer.getState());
+        if (nextItemId == focusedGeItemId && Objects.equals(nextSide, focusedGeSide))
         {
             return;
         }
+        boolean itemChanged = nextItemId != focusedGeItemId;
         focusedGeItemId = nextItemId;
+        focusedGeSide = nextSide;
         if (panel != null)
         {
-            panel.updateFocusedItem(focusedGeItemId);
+            panel.updateFocusedItem(focusedGeItemId, focusedGeSide);
         }
-        if (focusedGeItemId > 0)
+        if (itemChanged && focusedGeItemId > 0)
         {
             requestOverview(true);
         }
@@ -2299,7 +2312,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return 0;
     }
 
-    private int selectedGeOfferItemId()
+    private GrandExchangeOffer selectedGeOffer()
     {
         GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
         int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
@@ -2308,12 +2321,45 @@ public class OsrsFlipperSyncPlugin extends Plugin
             offers == null ? 0 : offers.length);
         if (offerIndex < 0)
         {
-            return 0;
+            return null;
         }
         GrandExchangeOffer offer = offers[offerIndex];
-        return offer == null || offer.getState() == GrandExchangeOfferState.EMPTY
+        return offer == null || offer.getState() == GrandExchangeOfferState.EMPTY ? null : offer;
+    }
+
+    private static int selectedOfferItemId(GrandExchangeOffer offer)
+    {
+        return offer == null
             ? 0
             : Math.max(0, offer.getItemId());
+    }
+
+    private static String widgetTreeText(Widget widget)
+    {
+        StringBuilder text = new StringBuilder();
+        appendWidgetTreeText(widget, text, 0);
+        return text.toString();
+    }
+
+    private static void appendWidgetTreeText(Widget widget, StringBuilder text, int depth)
+    {
+        if (widget == null || depth > 8)
+        {
+            return;
+        }
+        if (!isBlank(widget.getText()))
+        {
+            text.append(' ').append(widget.getText());
+        }
+        Widget[] children = widget.getChildren();
+        if (children == null)
+        {
+            return;
+        }
+        for (Widget child : children)
+        {
+            appendWidgetTreeText(child, text, depth + 1);
+        }
     }
 
     private int suggestedSellPriceFor(int itemId)

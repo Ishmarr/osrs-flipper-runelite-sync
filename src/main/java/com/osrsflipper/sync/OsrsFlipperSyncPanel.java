@@ -49,8 +49,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final Color PURPLE = new Color(202, 151, 235);
     private static final Color MUTED = new Color(170, 170, 170);
     private static final float DETAIL_FONT_SIZE = 15f;
+    private static final float ACTIVE_PRICE_FONT_SIZE = 17f;
     private static final float TAB_FONT_SIZE = 13f;
     private static final int DETAIL_ROW_HEIGHT = 27;
+    private static final int ACTIVE_PRICE_ROW_HEIGHT = 31;
+    private static final int COINS_ITEM_ID = 995;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
     private static final String STATS = "stats";
@@ -73,6 +76,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JLabel statsFlips = valueLabel("0", Color.WHITE, DETAIL_FONT_SIZE);
     private final JComboBox<PeriodChoice> statsPeriod = new JComboBox<>(PeriodChoice.values());
     private final JComboBox<StatsSortChoice> statsSort = new JComboBox<>(StatsSortChoice.values());
+    private final JLabel cashAvailable = valueLabel("0 GP", GOLD, 20f);
     private final JTextField cashInput = new JTextField();
     private final JLabel cashReserved = valueLabel("0 GP gereserveerd", MUTED, 12f);
     private final LongConsumer saveCashAction;
@@ -82,6 +86,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
     private Map<Integer, LastTradePriceView> lastTradePrices = Collections.emptyMap();
     private int focusedItemId;
+    private String focusedOfferSide = "";
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
@@ -152,10 +157,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     void updateFocusedItem(int itemId)
     {
+        updateFocusedItem(itemId, "");
+    }
+
+    void updateFocusedItem(int itemId, String side)
+    {
         int safeItemId = Math.max(0, itemId);
+        String safeSide = safeItemId > 0 && ("buy".equals(side) || "sell".equals(side))
+            ? side
+            : "";
         SwingUtilities.invokeLater(() ->
         {
             focusedItemId = safeItemId;
+            focusedOfferSide = safeSide;
             rebuildOpportunities();
         });
     }
@@ -169,6 +183,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             {
                 cashInput.setText(formatNumber(overview.cash.available));
             }
+            cashAvailable.setText(formatGp(overview.cash.available));
             cashReserved.setText(formatGp(overview.cash.reserved) + " gereserveerd");
             rebuildOpportunities();
             rebuildStats();
@@ -267,9 +282,24 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         page.add(Box.createVerticalStrut(7));
 
         JPanel cash = cardPanel();
+        JPanel cashHeadline = new JPanel(new BorderLayout(8, 0));
+        cashHeadline.setOpaque(false);
+        cashHeadline.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cashHeadline.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        cashHeadline.add(itemIcon(COINS_ITEM_ID), BorderLayout.WEST);
+        JPanel cashText = new JPanel();
+        cashText.setLayout(new BoxLayout(cashText, BoxLayout.Y_AXIS));
+        cashText.setOpaque(false);
         JLabel cashTitle = new JLabel("Vrije cashstack");
         cashTitle.setFont(cashTitle.getFont().deriveFont(Font.BOLD));
-        cash.add(cashTitle);
+        cashTitle.setForeground(GOLD);
+        cashTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cashAvailable.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cashText.add(cashTitle);
+        cashText.add(cashAvailable);
+        cashHeadline.add(cashText, BorderLayout.CENTER);
+        cash.add(cashHeadline);
+        cash.add(Box.createVerticalStrut(6));
         cashInput.setFont(cashInput.getFont().deriveFont(14f));
         cashInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         cashInput.setToolTipText("Vrije cash in GP; dit saldo wordt accountbreed bijgehouden");
@@ -479,20 +509,22 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         card.add(profit);
 
         LastTradePriceView lastTrade = lastTradePrices.get(opportunity.itemId);
+        boolean focusedCard = opportunity.itemId == focusedItemId;
+        boolean buying = focusedCard && "buy".equals(focusedOfferSide);
+        boolean selling = focusedCard && "sell".equals(focusedOfferSide);
         card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
-        card.add(coloredMetric("Koop", priceOrDash(FlipPriceResolver.buyPrice(opportunity, lastTrade)), GOLD));
-        card.add(coloredMetric("Verkoop", priceOrDash(FlipPriceResolver.sellPrice(opportunity, lastTrade)), GOLD));
-        card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE));
-        card.add(coloredMetric("Wiki instasell", priceOrDash(opportunity.instantSell), BLUE));
+        card.add(coloredMetric("Koop", priceOrDash(FlipPriceResolver.buyPrice(opportunity, lastTrade)), GOLD, buying));
+        card.add(coloredMetric("Verkoop", priceOrDash(FlipPriceResolver.sellPrice(opportunity, lastTrade)), GOLD, selling));
+        card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE, selling));
+        card.add(coloredMetric("Wiki instasell", priceOrDash(opportunity.instantSell), BLUE, buying));
         if (lastTrade != null && lastTrade.lastBuyPrice > 0)
         {
-            card.add(coloredMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice), PURPLE));
+            card.add(coloredMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice), PURPLE, selling));
         }
         if (lastTrade != null && lastTrade.lastSellPrice > 0)
         {
-            card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE));
+            card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE, buying));
         }
-        card.add(compactMetric("Winst per uur", formatGp(opportunity.maximumProfitPerHour) + "/u"));
         return card;
     }
 
@@ -699,11 +731,27 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private static JPanel coloredMetric(String title, String value, Color color)
     {
-        JPanel row = metric(title, valueLabel(value, color, DETAIL_FONT_SIZE));
+        return coloredMetric(title, value, color, false);
+    }
+
+    private static JPanel coloredMetric(String title, String value, Color color, boolean emphasized)
+    {
+        float size = emphasized ? ACTIVE_PRICE_FONT_SIZE : DETAIL_FONT_SIZE;
+        JPanel row = metric(title, valueLabel(value, color, size));
         Component label = ((BorderLayout) row.getLayout()).getLayoutComponent(BorderLayout.WEST);
         if (label != null)
         {
             label.setForeground(color);
+            if (emphasized)
+            {
+                label.setFont(label.getFont().deriveFont(Font.BOLD, size));
+            }
+        }
+        if (emphasized)
+        {
+            row.setMinimumSize(new Dimension(0, ACTIVE_PRICE_ROW_HEIGHT));
+            row.setPreferredSize(new Dimension(180, ACTIVE_PRICE_ROW_HEIGHT));
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, ACTIVE_PRICE_ROW_HEIGHT));
         }
         return row;
     }

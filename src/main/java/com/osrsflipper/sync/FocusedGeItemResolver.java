@@ -1,5 +1,8 @@
 package com.osrsflipper.sync;
 
+import java.util.Locale;
+import net.runelite.api.GrandExchangeOfferState;
+
 final class FocusedGeItemResolver
 {
     private FocusedGeItemResolver()
@@ -37,5 +40,44 @@ final class FocusedGeItemResolver
     {
         int index = selectedSlot - 1;
         return index >= 0 && index < offerCount ? index : -1;
+    }
+
+    static String resolveSide(
+        boolean setupVisible,
+        String setupText,
+        boolean detailsVisible,
+        GrandExchangeOfferState selectedOfferState)
+    {
+        if (setupVisible)
+        {
+            String normalized = setupText == null
+                ? ""
+                : setupText.toLowerCase(Locale.ROOT);
+            if (normalized.contains("buy offer"))
+            {
+                return "buy";
+            }
+            if (normalized.contains("sell offer"))
+            {
+                return "sell";
+            }
+        }
+        if (!detailsVisible || selectedOfferState == null)
+        {
+            return "";
+        }
+        switch (selectedOfferState)
+        {
+            case BUYING:
+            case BOUGHT:
+            case CANCELLED_BUY:
+                return "buy";
+            case SELLING:
+            case SOLD:
+            case CANCELLED_SELL:
+                return "sell";
+            default:
+                return "";
+        }
     }
 }
