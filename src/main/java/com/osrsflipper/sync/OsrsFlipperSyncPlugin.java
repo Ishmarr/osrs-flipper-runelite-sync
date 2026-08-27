@@ -43,7 +43,6 @@ import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
-import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -2128,26 +2127,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         Widget details = client.getWidget(InterfaceID.GeOffers.DETAILS);
         boolean setupVisible = isVisible(setup);
         boolean detailsVisible = isVisible(details);
-        int nextItemId = 0;
-        if (setupVisible || detailsVisible)
-        {
-            Widget itemWidget = client.getWidget(setupVisible
-                ? InterfaceID.GeOffers.SETUP_GRAPHIC4
-                : InterfaceID.GeOffers.DETAILS_GRAPHIC3);
-            if (itemWidget != null)
-            {
-                nextItemId = itemWidget.getItemId();
-            }
-            if (nextItemId <= 0)
-            {
-                nextItemId = client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH);
-            }
-            if (nextItemId <= 0)
-            {
-                nextItemId = client.getVarpValue(VarPlayerID.GE_LAST_OFFER_ITEM);
-            }
-        }
-        nextItemId = Math.max(0, nextItemId);
+        Widget setupItem = client.getWidget(InterfaceID.GeOffers.SETUP_GRAPHIC4);
+        Widget detailsItem = client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC3);
+        int nextItemId = FocusedGeItemResolver.resolve(
+            setupVisible,
+            setupItem == null ? 0 : setupItem.getItemId(),
+            detailsVisible,
+            detailsItem == null ? 0 : detailsItem.getItemId());
         if (nextItemId == focusedGeItemId)
         {
             return;

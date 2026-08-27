@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.0
+# OSRS Flipper Sync v5.2.1
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -59,6 +59,12 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - bij een geopend GE-item toont **Flips** tijdelijk alleen dat item met een vers scanneradvies;
 - een GE-actie veroorzaakt na de slotsync een gerichte extra refresh, zodat prijzen, cash en buy limits aansluiten op de website;
 - de dubbele scrollcontainer is verwijderd; elk tabblad heeft nu één werkende verticale scrollbar.
+
+## Oplossing in v5.2.1
+
+- een leeg geopend GE-slot activeert geen geselecteerde-itemmodus meer en laat de gewone top vijf in **Flips** staan;
+- alleen het echte itemicoon uit een zichtbaar koop-, verkoop- of detailscherm mag de lijst tijdelijk op één item focussen;
+- verouderde RuneScape-zoek- en laatste-offervariabelen kunnen daardoor geen oud item meer als geselecteerd tonen.
 
 ## Configuratie
 
