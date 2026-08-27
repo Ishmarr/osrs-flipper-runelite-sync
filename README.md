@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.0
+# OSRS Flipper Sync v5.2.3
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -59,6 +59,27 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - bij een geopend GE-item toont **Flips** tijdelijk alleen dat item met een vers scanneradvies;
 - een GE-actie veroorzaakt na de slotsync een gerichte extra refresh, zodat prijzen, cash en buy limits aansluiten op de website;
 - de dubbele scrollcontainer is verwijderd; elk tabblad heeft nu één werkende verticale scrollbar.
+
+## Oplossing in v5.2.1
+
+- een leeg geopend GE-slot activeert geen geselecteerde-itemmodus meer en laat de gewone top vijf in **Flips** staan;
+- alleen het actuele item uit een zichtbaar koop-, verkoop- of detailscherm mag de lijst tijdelijk op één item focussen; bij een koopselectie gebruikt de plugin RuneLites actuele zoekitem omdat het itemicoon daar nog leeg kan zijn;
+- een geopend bestaand offer leest het item rechtstreeks uit RuneLites actuele geselecteerde GE-slot en controleert alle detailswidgets;
+- verouderde RuneScape-zoek- en laatste-offervariabelen kunnen daardoor geen oud item meer als geselecteerd tonen.
+
+## Oplossing in v5.2.2
+
+- RuneLites één-gebaseerde geselecteerde GE-slot wordt expliciet naar de nul-gebaseerde offer-array vertaald, inclusief de grensslots 1 en 8;
+- het offer uit het geselecteerde slot krijgt voorrang op mogelijk verouderde itemwaarden in detailswidgets;
+- een bestaand offer toont daardoor altijd het item uit het werkelijk geopende slot, terwijl een leeg slot de gewone lijst behoudt;
+- de Worker levert het gerichte item als informatieve detailrij, ook wanneer het niet in de actuele scannerselectie valt.
+
+## Oplossing in v5.2.3
+
+- `Last buy price` en `Last sell price` worden alleen nog samen gepubliceerd na een volledige automatische 1×1-prijstest;
+- gewone flips, deelvullingen en losse één-itemorders kunnen de testprijzen niet meer overschrijven;
+- de koop moet binnen 30 seconden gevolgd worden door een lagere verkoopprijs, gelijk aan de classificatie van de webapp;
+- oude lokaal bewaarde prijzen uit gewone fills worden bij de upgrade niet opnieuw ingeladen.
 
 ## Configuratie
 

@@ -44,6 +44,7 @@ import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -1040,15 +1041,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
             next.spentAmount,
             next.status,
             next.price);
-        lastTradePrices.recordTransition(
-            next.itemId,
-            next.side,
-            previousFilled,
-            previousSpent,
-            next.filledQuantity,
-            next.spentAmount,
-            next.price,
-            next.lastEventAt);
+        if (!reconciliation)
+        {
+            lastTradePrices.recordTransition(
+                next.itemId,
+                next.side,
+                previousFilled,
+                previousSpent,
+                next.filledQuantity,
+                next.spentAmount,
+                next.totalQuantity,
+                next.status,
+                next.price,
+                next.lastEventAt);
+        }
 
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent(eventType));
@@ -2127,27 +2133,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
         Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
         Widget details = client.getWidget(InterfaceID.GeOffers.DETAILS);
         boolean setupVisible = isVisible(setup);
-        boolean detailsVisible = isVisible(details);
-        int nextItemId = 0;
-        if (setupVisible || detailsVisible)
-        {
-            Widget itemWidget = client.getWidget(setupVisible
-                ? InterfaceID.GeOffers.SETUP_GRAPHIC4
-                : InterfaceID.GeOffers.DETAILS_GRAPHIC3);
-            if (itemWidget != null)
-            {
-                nextItemId = itemWidget.getItemId();
-            }
-            if (nextItemId <= 0)
-            {
-                nextItemId = client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH);
-            }
-            if (nextItemId <= 0)
-            {
-                nextItemId = client.getVarpValue(VarPlayerID.GE_LAST_OFFER_ITEM);
-            }
-        }
-        nextItemId = Math.max(0, nextItemId);
+        Widget setupItem = client.getWidget(InterfaceID.GeOffers.SETUP_GRAPHIC4);
+        Widget[] detailsWidgets = new Widget[] {
+            details,
+            client.getWidget(InterfaceID.GeOffers.DETAILS_DESC),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_MARKETPRICE),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_FEE),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC3),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC4),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC5),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_GRAPHIC6),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_STATUS),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_COLLECT),
+            client.getWidget(InterfaceID.GeOffers.DETAILS_MODIFY)
+        };
+        boolean detailsVisible = anyVisible(detailsWidgets);
+        int nextItemId = FocusedGeItemResolver.resolve(
+            setupVisible,
+            setupItem == null ? 0 : setupItem.getItemId(),
+            setupVisible ? client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH) : 0,
+            detailsVisible,
+            firstItemId(detailsWidgets),
+            detailsVisible ? selectedGeOfferItemId() : 0);
         if (nextItemId == focusedGeItemId)
         {
             return;
@@ -2166,6 +2173,47 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static boolean isVisible(Widget widget)
     {
         return widget != null && !widget.isHidden();
+    }
+
+    private static boolean anyVisible(Widget[] widgets)
+    {
+        for (Widget widget : widgets)
+        {
+            if (isVisible(widget))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int firstItemId(Widget[] widgets)
+    {
+        for (Widget widget : widgets)
+        {
+            if (isVisible(widget) && widget.getItemId() > 0)
+            {
+                return widget.getItemId();
+            }
+        }
+        return 0;
+    }
+
+    private int selectedGeOfferItemId()
+    {
+        GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
+        int offerIndex = FocusedGeItemResolver.selectedOfferIndex(
+            selectedSlot,
+            offers == null ? 0 : offers.length);
+        if (offerIndex < 0)
+        {
+            return 0;
+        }
+        GrandExchangeOffer offer = offers[offerIndex];
+        return offer == null || offer.getState() == GrandExchangeOfferState.EMPTY
+            ? 0
+            : Math.max(0, offer.getItemId());
     }
 
     private int suggestedSellPriceFor(int itemId)

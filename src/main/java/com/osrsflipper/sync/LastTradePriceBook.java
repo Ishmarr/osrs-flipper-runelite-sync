@@ -9,6 +9,8 @@ import java.util.Map;
 final class LastTradePriceBook
 {
     private static final int MAX_ITEMS = 500;
+    private static final long MAX_PRICE_TEST_SECONDS = 30;
+    private static final int PRICE_TEST_FORMAT_VERSION = 1;
     private final Map<Integer, Entry> entries = new LinkedHashMap<>();
 
     void clear()
@@ -23,12 +25,27 @@ final class LastTradePriceBook
         int previousSpent,
         int filled,
         int spent,
+        int totalQuantity,
+        String status,
         int fallbackPrice,
         long eventAt)
     {
         int quantity = Math.max(0, filled - Math.max(0, previousFilled));
-        if (itemId <= 0 || quantity <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
+        if (itemId <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
         {
+            return;
+        }
+        Entry existing = entries.get(itemId);
+        boolean singleItemFill = quantity == 1 && totalQuantity == 1 && filled == 1 &&
+            ("partially_filled".equals(status) || "completed".equals(status));
+        if (!singleItemFill)
+        {
+            // Het actieve tegenoffer heeft nog geen fill en mag de zojuist
+            // vastgelegde 1x1-aankoop niet wissen. Een echte andere fill wel.
+            if (quantity > 0)
+            {
+                clearPending(existing);
+            }
             return;
         }
         long amount = Math.max(0L, (long) spent - Math.max(0, previousSpent));
@@ -42,17 +59,38 @@ final class LastTradePriceBook
 
         Entry entry = entries.computeIfAbsent(itemId, ignored -> new Entry());
         entry.itemId = itemId;
+        entry.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
         if ("buy".equals(side))
         {
-            entry.lastBuyPrice = unitPrice;
-            entry.lastBuyAt = Math.max(0, eventAt);
+            entry.pendingTestBuyPrice = unitPrice;
+            entry.pendingTestBuyAt = Math.max(0, eventAt);
         }
         else
         {
-            entry.lastSellPrice = unitPrice;
-            entry.lastSellAt = Math.max(0, eventAt);
+            long sellAt = Math.max(0, eventAt);
+            long elapsed = sellAt - entry.pendingTestBuyAt;
+            if (entry.pendingTestBuyPrice > unitPrice &&
+                entry.pendingTestBuyAt > 0 &&
+                elapsed >= 0 && elapsed <= MAX_PRICE_TEST_SECONDS)
+            {
+                entry.lastBuyPrice = entry.pendingTestBuyPrice;
+                entry.lastSellPrice = unitPrice;
+                entry.lastBuyAt = entry.pendingTestBuyAt;
+                entry.lastSellAt = sellAt;
+            }
+            clearPending(entry);
         }
         trimOldest();
+    }
+
+    private static void clearPending(Entry entry)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+        entry.pendingTestBuyPrice = 0;
+        entry.pendingTestBuyAt = 0;
     }
 
     void restore(Entry[] stored)
@@ -64,12 +102,15 @@ final class LastTradePriceBook
         }
         for (Entry entry : stored)
         {
-            if (entry != null && entry.itemId > 0)
+            if (entry != null && entry.itemId > 0 &&
+                entry.priceTestVersion == PRICE_TEST_FORMAT_VERSION)
             {
                 entry.lastBuyPrice = Math.max(0, entry.lastBuyPrice);
                 entry.lastSellPrice = Math.max(0, entry.lastSellPrice);
                 entry.lastBuyAt = Math.max(0, entry.lastBuyAt);
                 entry.lastSellAt = Math.max(0, entry.lastSellAt);
+                entry.pendingTestBuyPrice = Math.max(0, entry.pendingTestBuyPrice);
+                entry.pendingTestBuyAt = Math.max(0, entry.pendingTestBuyAt);
                 entries.put(entry.itemId, entry);
             }
         }
@@ -101,7 +142,9 @@ final class LastTradePriceBook
         while (entries.size() > MAX_ITEMS)
         {
             Integer oldest = entries.values().stream()
-                .min(Comparator.comparingLong(entry -> Math.max(entry.lastBuyAt, entry.lastSellAt)))
+                .min(Comparator.comparingLong(entry -> Math.max(
+                    Math.max(entry.lastBuyAt, entry.lastSellAt),
+                    entry.pendingTestBuyAt)))
                 .map(entry -> entry.itemId)
                 .orElse(null);
             if (oldest == null)
@@ -115,9 +158,12 @@ final class LastTradePriceBook
     static final class Entry
     {
         int itemId;
+        int priceTestVersion;
         int lastBuyPrice;
         int lastSellPrice;
         long lastBuyAt;
         long lastSellAt;
+        int pendingTestBuyPrice;
+        long pendingTestBuyAt;
     }
 }
