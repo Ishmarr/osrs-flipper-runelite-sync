@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.2
+# OSRS Flipper Sync v5.2.3
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -73,6 +73,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - het offer uit het geselecteerde slot krijgt voorrang op mogelijk verouderde itemwaarden in detailswidgets;
 - een bestaand offer toont daardoor altijd het item uit het werkelijk geopende slot, terwijl een leeg slot de gewone lijst behoudt;
 - de Worker levert het gerichte item als informatieve detailrij, ook wanneer het niet in de actuele scannerselectie valt.
+
+## Oplossing in v5.2.3
+
+- `Last buy price` en `Last sell price` worden alleen nog samen gepubliceerd na een volledige automatische 1×1-prijstest;
+- gewone flips, deelvullingen en losse één-itemorders kunnen de testprijzen niet meer overschrijven;
+- de koop moet binnen 30 seconden gevolgd worden door een lagere verkoopprijs, gelijk aan de classificatie van de webapp;
+- oude lokaal bewaarde prijzen uit gewone fills worden bij de upgrade niet opnieuw ingeladen.
 
 ## Configuratie
 

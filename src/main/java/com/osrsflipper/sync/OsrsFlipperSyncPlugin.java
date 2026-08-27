@@ -1041,15 +1041,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
             next.spentAmount,
             next.status,
             next.price);
-        lastTradePrices.recordTransition(
-            next.itemId,
-            next.side,
-            previousFilled,
-            previousSpent,
-            next.filledQuantity,
-            next.spentAmount,
-            next.price,
-            next.lastEventAt);
+        if (!reconciliation)
+        {
+            lastTradePrices.recordTransition(
+                next.itemId,
+                next.side,
+                previousFilled,
+                previousSpent,
+                next.filledQuantity,
+                next.spentAmount,
+                next.totalQuantity,
+                next.status,
+                next.price,
+                next.lastEventAt);
+        }
 
         slotSnapshots.put(slotNumber, next);
         enqueue(next.toSyncEvent(eventType));
