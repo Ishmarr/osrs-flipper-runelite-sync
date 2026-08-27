@@ -2082,11 +2082,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             url.addQueryParameter("focus_item_id", Integer.toString(focusedGeItemId));
         }
-        if (force)
-        {
-            url.addQueryParameter("fresh", "1");
-        }
-
         Request request = authorizedRequest(url.build()).get().build();
         overviewInFlight = true;
         overviewTicks = 0;

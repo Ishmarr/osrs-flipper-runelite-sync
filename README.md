@@ -113,6 +113,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 
 - De cashstackeditor heeft een groter, vet en goud invoerveld; de afzonderlijke regel met gereserveerde cash is verwijderd.
 - Een geopend bestaand GE-offer blijft als geselecteerde flip zichtbaar via de lokale slotgegevens, ook wanneer het item niet meer in de actuele scannerselectie voorkomt.
+- Handmatige en GE-gestuurde overzichtsrefreshes omzeilen de servercache niet meer; actuele live prijzen blijven vernieuwen zonder dezelfde D1-statistieken herhaald breed te lezen.
 
 ## Configuratie
 
