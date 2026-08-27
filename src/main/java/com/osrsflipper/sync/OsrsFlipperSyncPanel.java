@@ -440,11 +440,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
         if (focusedItemId > 0)
         {
-            RuneliteOverviewView.Opportunity focused = overview.opportunityForItem(focusedItemId);
-            if (focused == null)
-            {
-                focused = activeOfferOpportunity(focusedItemId, focusedOfferSide, offers);
-            }
+            RuneliteOverviewView.Opportunity focused = focusedOpportunity(
+                focusedItemId,
+                focusedOfferSide,
+                overview,
+                offers);
             addOpportunitySection(
                 "Geselecteerde flip",
                 focused == null ? Collections.emptyList() : Collections.singletonList(focused),
@@ -521,9 +521,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         boolean focusedCard = opportunity.itemId == focusedItemId;
         boolean buying = focusedCard && "buy".equals(focusedOfferSide);
         boolean selling = focusedCard && "sell".equals(focusedOfferSide);
+        int displayedBuyPrice = displayedBuyPrice(opportunity, lastTrade);
+        int displayedSellPrice = displayedSellPrice(opportunity, lastTrade);
         card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
-        card.add(coloredMetric("Koop", priceOrDash(FlipPriceResolver.buyPrice(opportunity, lastTrade)), GOLD, buying));
-        card.add(coloredMetric("Verkoop", priceOrDash(FlipPriceResolver.sellPrice(opportunity, lastTrade)), GOLD, selling));
+        card.add(coloredMetric("Koop", priceOrDash(displayedBuyPrice), GOLD, buying));
+        card.add(coloredMetric("Verkoop", priceOrDash(displayedSellPrice), GOLD, selling));
         card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE, selling));
         card.add(coloredMetric("Wiki instasell", priceOrDash(opportunity.instantSell), BLUE, buying));
         if (lastTrade != null && lastTrade.lastBuyPrice > 0)
@@ -534,15 +536,39 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE, buying));
         }
-        int buyPrice = FlipPriceResolver.buyPrice(opportunity, lastTrade);
-        if (focusedCard && buyPrice > 0)
+        if (focusedCard && displayedBuyPrice > 0)
         {
             int lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
-                buyPrice,
+                displayedBuyPrice,
                 opportunity.itemName);
             card.add(coloredMetric("Lowest price", priceOrDash(lowestPrice), GOLD, selling));
         }
         return card;
+    }
+
+    static int displayedBuyPrice(
+        RuneliteOverviewView.Opportunity opportunity,
+        LastTradePriceView lastTrade)
+    {
+        return isActiveOffer(opportunity)
+            ? Math.max(0, opportunity.buyPrice)
+            : FlipPriceResolver.buyPrice(opportunity, lastTrade);
+    }
+
+    static int displayedSellPrice(
+        RuneliteOverviewView.Opportunity opportunity,
+        LastTradePriceView lastTrade)
+    {
+        return isActiveOffer(opportunity)
+            ? Math.max(0, opportunity.sellPrice)
+            : FlipPriceResolver.sellPrice(opportunity, lastTrade);
+    }
+
+    private static boolean isActiveOffer(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return opportunity != null &&
+            ("active_buy".equals(opportunity.ranking) ||
+                "active_sell".equals(opportunity.ranking));
     }
 
     private static JButton primaryActionButton(String text)
@@ -593,7 +619,9 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             return null;
         }
         boolean buy = "buy".equals(fallback.side);
-        int buyPrice = buy ? fallback.price : fallback.wikiInstantSellPrice;
+        int buyPrice = buy
+            ? (fallback.suggestedBuyPrice > 0 ? fallback.suggestedBuyPrice : fallback.price)
+            : fallback.wikiInstantSellPrice;
         int sellPrice = buy
             ? (fallback.suggestedSellPrice > 0
                 ? fallback.suggestedSellPrice
@@ -613,6 +641,20 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             0,
             0,
             0);
+    }
+
+    static RuneliteOverviewView.Opportunity focusedOpportunity(
+        int itemId,
+        String side,
+        RuneliteOverviewView overview,
+        List<FlipperOfferView> activeOffers)
+    {
+        RuneliteOverviewView.Opportunity active = activeOfferOpportunity(itemId, side, activeOffers);
+        if (active != null)
+        {
+            return active;
+        }
+        return overview == null ? null : overview.opportunityForItem(itemId);
     }
 
     static List<RuneliteOverviewView.Opportunity> visibleCycleOpportunities(

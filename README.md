@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.8
+# OSRS Flipper Sync v5.2.9
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -121,6 +121,15 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - Het prijsinvoervenster achter de GE-knop met drie puntjes toont een eigen goudkleurige, klikbare koop- of verkoopprijs uit exact dezelfde centrale prijsregels als de Flip-kaart.
 - **Lowest price** toont bij een geselecteerde flip de minimale bruto verkoopprijs waarmee de aankoop na GE-tax nog net break-even blijft.
 - De uitleg onder de itemopbrengsten is verwijderd en de cashstackopslag is een duidelijk contrasterende primaire knop geworden.
+
+## Nieuw in v5.2.9
+
+- Het hoeveelheidsvenster achter de linker GE-knop met drie puntjes toont een eigen goudkleurige, klikbare regel met het aanbevolen aantal uit de Flip-kaart.
+- Dat aantal gebruikt exact de bestaande scannergrenzen voor vrije cash, resterende buy limit en maximaal één uur koopvolume.
+- Een klik op de regel vult het aanbevolen aantal meteen in als GE-hoeveelheid.
+- Een gestart koopoffer bevriest de getoonde koopprijs en Wiki-startprijzen accountbreed; een live scannerrefresh kan ze niet meer verschuiven.
+- Het verkoopdoel begint bij de beste prijs van het startmoment en mag tijdens hetzelfde offer uitsluitend omhoog, nooit omlaag.
+- De eigen prijsregel kiest automatisch de hoogste vrije regel in het GE-invoervenster en overlapt daardoor niet onnodig met andere pluginregels.
 
 ## Configuratie
 

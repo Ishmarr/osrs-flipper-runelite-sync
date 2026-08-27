@@ -94,6 +94,12 @@ final class RuneliteOverviewView
         return null;
     }
 
+    int maximumQuantityForItem(int itemId)
+    {
+        Opportunity opportunity = opportunityForItem(itemId);
+        return opportunity == null ? 0 : opportunity.maximumQuantity;
+    }
+
     PeriodStats statsFor(String period)
     {
         if ("month".equals(period))
