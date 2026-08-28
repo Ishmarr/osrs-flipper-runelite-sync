@@ -125,6 +125,31 @@ public class ActiveOfferOpportunityTest
         assertEquals(600, active.instantSell);
     }
 
+    @Test
+    public void activeBuyAndLinkedSellKeepTheSameFrozenLowestPriceWhileWikiMoves()
+    {
+        FlipperOfferView buy = new FlipperOfferView(
+            1, 5952, "Antidote++(4)", "buy", 9_398,
+            2_846, 0, "active", 10, 0,
+            9_398, 9_681, 9_682, 9_397, 9_589);
+        FlipperOfferView sell = new FlipperOfferView(
+            2, 5952, "Antidote++(4)", "sell", 9_488,
+            1_212, 0, "active", 20, 0,
+            9_277, 9_488, 10_100, 8_900, 9_589);
+
+        RuneliteOverviewView.Opportunity activeBuy =
+            OsrsFlipperSyncPanel.activeOfferOpportunity(
+                5952, "buy", java.util.Collections.singletonList(buy));
+        RuneliteOverviewView.Opportunity activeSell =
+            OsrsFlipperSyncPanel.activeOfferOpportunity(
+                5952, "sell", java.util.Collections.singletonList(sell));
+
+        assertEquals(9_589, activeBuy.lowestSellPrice);
+        assertEquals(9_589, activeSell.lowestSellPrice);
+        assertEquals(10_100, activeSell.instantBuy);
+        assertEquals(8_900, activeSell.instantSell);
+    }
+
     private static FlipperOfferView offer(
         int slot,
         String side,

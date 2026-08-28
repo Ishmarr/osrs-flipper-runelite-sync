@@ -10,6 +10,79 @@ final class OfferGuidanceResolver
     {
     }
 
+    static Guidance buy(
+        int actualOrderPrice,
+        int currentSellCandidate,
+        String itemName,
+        Guidance previous,
+        boolean continuingOffer)
+    {
+        Guidance repriced = reprice(
+            "buy",
+            actualOrderPrice,
+            currentSellCandidate,
+            continuingOffer ? previous : Guidance.empty());
+        int lowestSellPrice = freezeLowestSellPrice(
+            repriced.lowestSellPrice,
+            repriced.buyPrice,
+            itemName);
+        return new Guidance(
+            repriced.buyPrice,
+            repriced.sellPrice,
+            repriced.sourceBuyOfferId,
+            lowestSellPrice);
+    }
+
+    static int freezeLowestSellPrice(int existingLowestSellPrice, int buyPrice, String itemName)
+    {
+        if (existingLowestSellPrice > 0)
+        {
+            return existingLowestSellPrice;
+        }
+        return SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+            buyPrice,
+            itemName);
+    }
+
+    static int adoptServerLowestSellPrice(int localLowestSellPrice, int serverLowestSellPrice)
+    {
+        return serverLowestSellPrice > 0
+            ? serverLowestSellPrice
+            : Math.max(0, localLowestSellPrice);
+    }
+
+    static boolean continuesOfferLifecycle(boolean sameOfferShape, String previousStatus)
+    {
+        return sameOfferShape &&
+            !"completed".equals(previousStatus) &&
+            !"cancelled".equals(previousStatus);
+    }
+
+    static BuyCandidate frozenBuyCandidate(
+        int slotNumber,
+        int itemId,
+        int filledQuantity,
+        long startedAt,
+        long lastEventAt,
+        String offerId,
+        String itemName,
+        int buyPrice,
+        int sellPrice,
+        int lowestSellPrice)
+    {
+        int safeBuyPrice = Math.max(0, buyPrice);
+        return new BuyCandidate(
+            slotNumber,
+            itemId,
+            filledQuantity,
+            startedAt,
+            lastEventAt,
+            offerId,
+            safeBuyPrice,
+            sellPrice,
+            freezeLowestSellPrice(lowestSellPrice, safeBuyPrice, itemName));
+    }
+
     static Guidance reprice(
         String side,
         int actualOrderPrice,
@@ -29,7 +102,8 @@ final class OfferGuidanceResolver
         return new Guidance(
             buyPrice,
             sellPrice,
-            safePrevious.sourceBuyOfferId);
+            safePrevious.sourceBuyOfferId,
+            safePrevious.lowestSellPrice);
     }
 
     static Guidance linkedSell(
@@ -48,7 +122,8 @@ final class OfferGuidanceResolver
         return new Guidance(
             buyPrice,
             sellPrice,
-            source == null ? "" : source.offerId);
+            source == null ? "" : source.offerId,
+            source == null ? 0 : source.lowestSellPrice);
     }
 
     static BuyCandidate selectBuyForSell(
@@ -90,17 +165,24 @@ final class OfferGuidanceResolver
         final int buyPrice;
         final int sellPrice;
         final String sourceBuyOfferId;
+        final int lowestSellPrice;
 
         Guidance(int buyPrice, int sellPrice, String sourceBuyOfferId)
+        {
+            this(buyPrice, sellPrice, sourceBuyOfferId, 0);
+        }
+
+        Guidance(int buyPrice, int sellPrice, String sourceBuyOfferId, int lowestSellPrice)
         {
             this.buyPrice = Math.max(0, buyPrice);
             this.sellPrice = Math.max(0, sellPrice);
             this.sourceBuyOfferId = sourceBuyOfferId == null ? "" : sourceBuyOfferId;
+            this.lowestSellPrice = Math.max(0, lowestSellPrice);
         }
 
         static Guidance empty()
         {
-            return new Guidance(0, 0, "");
+            return new Guidance(0, 0, "", 0);
         }
     }
 
@@ -114,6 +196,7 @@ final class OfferGuidanceResolver
         final String offerId;
         final int buyPrice;
         final int sellPrice;
+        final int lowestSellPrice;
 
         BuyCandidate(
             int slotNumber,
@@ -125,6 +208,21 @@ final class OfferGuidanceResolver
             int buyPrice,
             int sellPrice)
         {
+            this(slotNumber, itemId, filledQuantity, startedAt, lastEventAt,
+                offerId, buyPrice, sellPrice, 0);
+        }
+
+        BuyCandidate(
+            int slotNumber,
+            int itemId,
+            int filledQuantity,
+            long startedAt,
+            long lastEventAt,
+            String offerId,
+            int buyPrice,
+            int sellPrice,
+            int lowestSellPrice)
+        {
             this.slotNumber = slotNumber;
             this.itemId = itemId;
             this.filledQuantity = Math.max(0, filledQuantity);
@@ -133,6 +231,7 @@ final class OfferGuidanceResolver
             this.offerId = offerId == null ? "" : offerId;
             this.buyPrice = Math.max(0, buyPrice);
             this.sellPrice = Math.max(0, sellPrice);
+            this.lowestSellPrice = Math.max(0, lowestSellPrice);
         }
     }
 }

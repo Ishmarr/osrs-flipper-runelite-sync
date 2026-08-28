@@ -45,7 +45,8 @@ final class SelectedGeOpportunityResolver
                 exactActiveOffer.suggestedBuyPrice,
                 exactActiveOffer.suggestedSellPrice,
                 liveInstantBuy,
-                liveInstantSell);
+                liveInstantSell,
+                exactActiveOffer.lowestSellPrice);
             RuneliteOverviewView.Opportunity active = OsrsFlipperSyncPanel.activeOfferOpportunity(
                 itemId,
                 side,

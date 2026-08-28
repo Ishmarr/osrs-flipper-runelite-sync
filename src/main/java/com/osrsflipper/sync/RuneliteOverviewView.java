@@ -142,6 +142,7 @@ final class RuneliteOverviewView
         final long maximumProfitPerHour;
         final long maximumCycleProfit;
         final long priceUpdatedAt;
+        final int lowestSellPrice;
 
         Opportunity(
             int itemId,
@@ -158,6 +159,27 @@ final class RuneliteOverviewView
             long maximumCycleProfit,
             long priceUpdatedAt)
         {
+            this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy,
+                instantSell, expectedQuantity, expectedProfit, maximumQuantity,
+                maximumProfitPerHour, maximumCycleProfit, priceUpdatedAt, 0);
+        }
+
+        Opportunity(
+            int itemId,
+            String itemName,
+            String ranking,
+            int buyPrice,
+            int sellPrice,
+            int instantBuy,
+            int instantSell,
+            int expectedQuantity,
+            long expectedProfit,
+            int maximumQuantity,
+            long maximumProfitPerHour,
+            long maximumCycleProfit,
+            long priceUpdatedAt,
+            int lowestSellPrice)
+        {
             this.itemId = Math.max(0, itemId);
             this.itemName = itemName == null ? "" : itemName;
             this.ranking = ranking == null ? "" : ranking;
@@ -171,6 +193,7 @@ final class RuneliteOverviewView
             this.maximumProfitPerHour = Math.max(0, maximumProfitPerHour);
             this.maximumCycleProfit = Math.max(0, maximumCycleProfit);
             this.priceUpdatedAt = Math.max(0, priceUpdatedAt);
+            this.lowestSellPrice = Math.max(0, lowestSellPrice);
         }
     }
 

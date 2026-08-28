@@ -547,11 +547,17 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             card.add(coloredMetric("Last sell price", priceOrDash(lastTrade.lastSellPrice), PURPLE, buying));
         }
-        if (focusedCard && displayedBuyPrice > 0)
+        if (focusedCard)
         {
-            int lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
-                displayedBuyPrice,
-                opportunity.itemName);
+            int lowestPrice = opportunity.lowestSellPrice;
+            if (lowestPrice <= 0 &&
+                SelectedGeOpportunityResolver.isSelectedSetup(opportunity) &&
+                displayedBuyPrice > 0)
+            {
+                lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+                    displayedBuyPrice,
+                    opportunity.itemName);
+            }
             card.add(coloredMetric("Lowest price", priceOrDash(lowestPrice), GOLD, selling));
         }
         if (displayedBuyPrice > 0 && displayedSellPrice > 0)
@@ -660,7 +666,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             fallback.totalQuantity,
             0,
             0,
-            0);
+            0,
+            fallback.lowestSellPrice);
     }
 
     static RuneliteOverviewView.Opportunity focusedOpportunity(
@@ -728,12 +735,15 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         StatsSortChoice selected = (StatsSortChoice) statsSort.getSelectedItem();
         List<RuneliteOverviewView.PeriodItem> visible = visibleStatsItems(
             items,
-            selected == StatsSortChoice.LOSS);
+            selected == null ? StatsSortChoice.PROFIT : selected);
         if (visible.isEmpty())
         {
-            statsItemsList.add(emptyMessage(selected == StatsSortChoice.LOSS
+            String message = selected == StatsSortChoice.LOSS
                 ? "Nog geen gerealiseerd itemverlies in deze periode."
-                : "Nog geen gerealiseerde itemwinst in deze periode."));
+                : selected == StatsSortChoice.TOTAL
+                    ? "Nog geen gerealiseerde itemopbrengsten in deze periode."
+                    : "Nog geen gerealiseerde itemwinst in deze periode.";
+            statsItemsList.add(emptyMessage(message));
         }
         else
         {
@@ -770,6 +780,14 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         List<RuneliteOverviewView.PeriodItem> items,
         boolean losses)
     {
+        return visibleStatsItems(items, losses ? StatsSortChoice.LOSS : StatsSortChoice.PROFIT);
+    }
+
+    static List<RuneliteOverviewView.PeriodItem> visibleStatsItems(
+        List<RuneliteOverviewView.PeriodItem> items,
+        StatsSortChoice sortChoice)
+    {
+        StatsSortChoice selected = sortChoice == null ? StatsSortChoice.PROFIT : sortChoice;
         List<RuneliteOverviewView.PeriodItem> visible = new ArrayList<>();
         if (items != null)
         {
@@ -779,17 +797,21 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 {
                     continue;
                 }
-                if (losses && item.realizedProfit < 0)
+                if (selected == StatsSortChoice.TOTAL && item.realizedProfit != 0)
                 {
                     visible.add(item);
                 }
-                else if (!losses && item.realizedProfit > 0)
+                else if (selected == StatsSortChoice.LOSS && item.realizedProfit < 0)
+                {
+                    visible.add(item);
+                }
+                else if (selected == StatsSortChoice.PROFIT && item.realizedProfit > 0)
                 {
                     visible.add(item);
                 }
             }
         }
-        visible.sort(losses
+        visible.sort(selected == StatsSortChoice.LOSS
             ? Comparator.comparingLong(item -> item.realizedProfit)
             : Comparator.comparingLong((RuneliteOverviewView.PeriodItem item) -> item.realizedProfit).reversed());
         return visible;
@@ -1158,10 +1180,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
     }
 
-    private enum StatsSortChoice
+    enum StatsSortChoice
     {
-        PROFIT("Meeste winst"),
-        LOSS("Meeste verlies");
+        PROFIT("Winst"),
+        LOSS("Verlies"),
+        TOTAL("Totaal");
 
         final String label;
 
