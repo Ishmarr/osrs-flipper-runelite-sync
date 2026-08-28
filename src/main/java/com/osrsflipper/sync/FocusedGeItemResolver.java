@@ -6,6 +6,13 @@ import net.runelite.api.GrandExchangeOfferState;
 
 final class FocusedGeItemResolver
 {
+    enum EditorContext
+    {
+        NONE,
+        NEW_SETUP,
+        EXISTING_OFFER
+    }
+
     private FocusedGeItemResolver()
     {
     }
@@ -41,6 +48,28 @@ final class FocusedGeItemResolver
     {
         int index = selectedSlot - 1;
         return index >= 0 && index < offerCount ? index : -1;
+    }
+
+    static EditorContext editorContext(
+        boolean setupVisible,
+        boolean detailsVisible,
+        EditorContext previousContext,
+        int selectedSlot,
+        int previousExistingSlot,
+        boolean exactSelectedOffer)
+    {
+        if (detailsVisible)
+        {
+            return exactSelectedOffer ? EditorContext.EXISTING_OFFER : EditorContext.NONE;
+        }
+        if (!setupVisible)
+        {
+            return EditorContext.NONE;
+        }
+        return previousContext == EditorContext.EXISTING_OFFER &&
+            selectedSlot > 0 && selectedSlot == previousExistingSlot && exactSelectedOffer
+            ? EditorContext.EXISTING_OFFER
+            : EditorContext.NEW_SETUP;
     }
 
     static int priceEditorItemId(int setupItemId, int focusedItemId, int searchedItemId)

@@ -88,6 +88,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private Map<Integer, LastTradePriceView> lastTradePrices = Collections.emptyMap();
     private int focusedItemId;
     private String focusedOfferSide = "";
+    private RuneliteOverviewView.Opportunity resolvedFocusedOpportunity;
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
@@ -158,10 +159,18 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     void updateFocusedItem(int itemId)
     {
-        updateFocusedItem(itemId, "");
+        updateFocusedItem(itemId, "", null);
     }
 
     void updateFocusedItem(int itemId, String side)
+    {
+        updateFocusedItem(itemId, side, null);
+    }
+
+    void updateFocusedItem(
+        int itemId,
+        String side,
+        RuneliteOverviewView.Opportunity resolvedOpportunity)
     {
         int safeItemId = Math.max(0, itemId);
         String safeSide = safeItemId > 0 && ("buy".equals(side) || "sell".equals(side))
@@ -171,6 +180,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             focusedItemId = safeItemId;
             focusedOfferSide = safeSide;
+            resolvedFocusedOpportunity = resolvedOpportunity != null &&
+                resolvedOpportunity.itemId == safeItemId
+                ? resolvedOpportunity
+                : null;
             rebuildOpportunities();
         });
     }
@@ -442,11 +455,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
         if (focusedItemId > 0)
         {
-            RuneliteOverviewView.Opportunity focused = focusedOpportunity(
-                focusedItemId,
-                focusedOfferSide,
-                overview,
-                offers);
+            RuneliteOverviewView.Opportunity focused = resolvedFocusedOpportunity;
             addOpportunitySection(
                 "Geselecteerde flip",
                 focused == null ? Collections.emptyList() : Collections.singletonList(focused),
