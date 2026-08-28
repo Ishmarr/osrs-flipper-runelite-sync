@@ -58,7 +58,7 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        return isActiveOffer(opportunity)
+        return isFixedSelection(opportunity)
             ? Math.max(0, opportunity.buyPrice)
             : buyPrice(opportunity, priceTest);
     }
@@ -67,7 +67,7 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        return isActiveOffer(opportunity)
+        return isFixedSelection(opportunity)
             ? Math.max(0, opportunity.sellPrice)
             : sellPrice(opportunity, priceTest);
     }
@@ -78,7 +78,7 @@ final class FlipPriceResolver
         MarketPriceView market,
         LastTradePriceView priceTest)
     {
-        if (isActiveOffer(opportunity))
+        if (isFixedSelection(opportunity))
         {
             return "buy".equals(side)
                 ? Math.max(0, opportunity.buyPrice)
@@ -108,6 +108,11 @@ final class FlipPriceResolver
         return opportunity != null &&
             ("active_buy".equals(opportunity.ranking) ||
                 "active_sell".equals(opportunity.ranking));
+    }
+
+    private static boolean isFixedSelection(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return isActiveOffer(opportunity) || SelectedGeOpportunityResolver.isSelectedSetup(opportunity);
     }
 
     private static int plusOne(int value)

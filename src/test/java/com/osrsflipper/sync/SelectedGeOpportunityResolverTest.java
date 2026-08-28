@@ -1,0 +1,172 @@
+package com.osrsflipper.sync;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+
+public class SelectedGeOpportunityResolverTest
+{
+    @Test
+    public void newSellUsesTheSameLiveWikiPriceForCardAndChat()
+    {
+        SelectedGeOpportunityResolver.Resolution resolved = resolveNewSell(
+            new MarketPriceView(101, 656_461, 651_000, 20, 21, 22));
+
+        assertEquals(656_461, resolved.opportunity.instantBuy);
+        assertEquals(656_460, resolved.price("sell"));
+        assertEquals(resolved.price("sell"),
+            OsrsFlipperSyncPanel.displayedSellPrice(resolved.opportunity, null));
+    }
+
+    @Test
+    public void newSetupIgnoresAStaleActiveOfferFromTheSelectedSlot()
+    {
+        FlipperOfferView stale = activeSell(640_000, 700_000, 654_689, 650_000);
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                101,
+                "sell",
+                scanner(),
+                new MarketPriceView(101, 656_461, 651_000, 20, 21, 22),
+                null,
+                stale);
+
+        assertEquals(656_460, resolved.price("sell"));
+        assertEquals("selected_setup", resolved.opportunity.ranking);
+    }
+
+    @Test
+    public void newSetupOutsideScannerRulesRemainsEmpty()
+    {
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                101,
+                "sell",
+                null,
+                new MarketPriceView(101, 656_461, 651_000, 20, 21, 22),
+                null,
+                activeSell(640_000, 700_000, 654_689, 650_000));
+
+        assertNull(resolved.opportunity);
+        assertEquals(0, resolved.price("sell"));
+    }
+
+    @Test
+    public void exactExistingOfferKeepsItsFrozenPlan()
+    {
+        FlipperOfferView active = activeSell(640_000, 700_000, 800_000, 600_000);
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                101,
+                "sell",
+                scanner(),
+                new MarketPriceView(101, 900_000, 500_000, 20, 21, 22),
+                null,
+                active);
+
+        assertEquals("active_sell", resolved.opportunity.ranking);
+        assertEquals(640_000, resolved.opportunity.buyPrice);
+        assertEquals(700_000, resolved.price("sell"));
+        assertEquals(900_000, resolved.opportunity.instantBuy);
+    }
+
+    @Test
+    public void liveMarketRefreshMovesCardAndChatTogether()
+    {
+        SelectedGeOpportunityResolver.Resolution first = resolveNewSell(
+            new MarketPriceView(101, 656_461, 651_000, 20, 21, 22));
+        SelectedGeOpportunityResolver.Resolution refreshed = resolveNewSell(
+            new MarketPriceView(101, 660_001, 652_000, 30, 31, 32));
+
+        assertEquals(656_460, first.price("sell"));
+        assertEquals(660_000, refreshed.price("sell"));
+        assertEquals(refreshed.price("sell"),
+            OsrsFlipperSyncPanel.displayedSellPrice(refreshed.opportunity, null));
+    }
+
+    @Test
+    public void onlyAnExistingDetailsTransitionMayKeepTheFrozenContext()
+    {
+        assertEquals(FocusedGeItemResolver.EditorContext.NEW_SETUP,
+            FocusedGeItemResolver.editorContext(
+                true,
+                false,
+                FocusedGeItemResolver.EditorContext.NONE,
+                2,
+                0,
+                true));
+        assertEquals(FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+            FocusedGeItemResolver.editorContext(
+                false,
+                true,
+                FocusedGeItemResolver.EditorContext.NONE,
+                2,
+                0,
+                true));
+        assertEquals(FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+            FocusedGeItemResolver.editorContext(
+                true,
+                false,
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                2,
+                2,
+                true));
+    }
+
+    private static SelectedGeOpportunityResolver.Resolution resolveNewSell(MarketPriceView market)
+    {
+        return SelectedGeOpportunityResolver.resolve(
+            FocusedGeItemResolver.EditorContext.NEW_SETUP,
+            101,
+            "sell",
+            scanner(),
+            market,
+            null,
+            null);
+    }
+
+    private static RuneliteOverviewView.Opportunity scanner()
+    {
+        return new RuneliteOverviewView.Opportunity(
+            101,
+            "Dragon crossbow",
+            "cycle_profit",
+            650_001,
+            654_688,
+            654_689,
+            650_000,
+            100,
+            10_000,
+            100,
+            50_000,
+            100_000,
+            10);
+    }
+
+    private static FlipperOfferView activeSell(
+        int buyPrice,
+        int sellPrice,
+        int instantBuy,
+        int instantSell)
+    {
+        return new FlipperOfferView(
+            2,
+            101,
+            "Dragon crossbow",
+            "sell",
+            sellPrice,
+            100,
+            0,
+            "active",
+            1,
+            0,
+            buyPrice,
+            sellPrice,
+            instantBuy,
+            instantSell);
+    }
+}

@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.11";
+    private static final String PLUGIN_VERSION = "5.2.12";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -189,6 +189,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
     private String focusedGeSide;
+    private FocusedGeItemResolver.EditorContext focusedGeContext =
+        FocusedGeItemResolver.EditorContext.NONE;
+    private int focusedExistingSlot;
 
     @Provides
     OsrsFlipperSyncConfig provideConfig(ConfigManager manager)
@@ -231,6 +234,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
         focusedGeSide = "";
+        focusedGeContext = FocusedGeItemResolver.EditorContext.NONE;
+        focusedExistingSlot = 0;
         overview = RuneliteOverviewView.empty();
         snapshotSequence = 0;
         snapshotReason = "startup";
@@ -302,6 +307,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
         focusedGeSide = "";
+        focusedGeContext = FocusedGeItemResolver.EditorContext.NONE;
+        focusedExistingSlot = 0;
         overview = RuneliteOverviewView.empty();
         activeAccountHash = NO_ACCOUNT;
         LOG.info("OSRS Flipper Sync gestopt");
@@ -2128,6 +2135,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         panel.updateOffers(offers);
         panel.updateOverview(overview);
         panel.updateLastTradePrices(lastTradePrices.snapshot());
+        SelectedGeOpportunityResolver.Resolution focused = resolveSelectedGeOpportunity(
+            focusedGeItemId,
+            focusedGeSide);
+        panel.updateFocusedItem(focusedGeItemId, focusedGeSide, focused.opportunity);
     }
 
     private void resetSessionStats()
@@ -2223,8 +2234,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             markWorkerSuccess();
             if (panel != null)
             {
-                panel.updateOverview(overview);
-                panel.updateLastTradePrices(lastTradePrices.snapshot());
+                refreshSidePanel();
             }
             // De focusrespons kan pas aankomen nadat het hoeveelheidsvenster
             // al geopend is. Probeer de eigen klikregel dan meteen opnieuw.
@@ -2335,7 +2345,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             client.getWidget(InterfaceID.GeOffers.DETAILS_MODIFY)
         };
         boolean detailsVisible = anyVisible(detailsWidgets);
-        GrandExchangeOffer selectedOffer = detailsVisible ? selectedGeOffer() : null;
+        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
+        GrandExchangeOffer selectedOffer = geOfferAtSlot(selectedSlot);
         int nextItemId = FocusedGeItemResolver.resolve(
             setupVisible,
             setupItem == null ? 0 : setupItem.getItemId(),
@@ -2350,25 +2361,44 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 widgetTreeText(setup),
                 detailsVisible,
                 selectedOffer == null ? null : selectedOffer.getState());
-        if (nextItemId == focusedGeItemId && Objects.equals(nextSide, focusedGeSide))
+        FlipperOfferView exactSelectedOffer = exactSelectedOffer(nextItemId, nextSide, selectedSlot);
+        FocusedGeItemResolver.EditorContext nextContext = FocusedGeItemResolver.editorContext(
+            setupVisible,
+            detailsVisible,
+            focusedGeContext,
+            selectedSlot,
+            focusedExistingSlot,
+            exactSelectedOffer != null);
+        int nextExistingSlot = nextContext == FocusedGeItemResolver.EditorContext.EXISTING_OFFER
+            ? selectedSlot
+            : 0;
+        if (nextItemId == focusedGeItemId && Objects.equals(nextSide, focusedGeSide) &&
+            nextContext == focusedGeContext && nextExistingSlot == focusedExistingSlot)
         {
             return;
         }
         boolean itemChanged = nextItemId != focusedGeItemId;
+        boolean sideChanged = !Objects.equals(nextSide, focusedGeSide);
+        boolean contextChanged = nextContext != focusedGeContext || nextExistingSlot != focusedExistingSlot;
         focusedGeItemId = nextItemId;
         focusedGeSide = nextSide;
-        if (panel != null)
-        {
-            panel.updateFocusedItem(focusedGeItemId, focusedGeSide);
-        }
+        focusedGeContext = nextContext;
+        focusedExistingSlot = nextExistingSlot;
+        refreshSidePanel();
         if (itemChanged && focusedGeItemId > 0)
         {
             requestOverview(true);
+        }
+        if (focusedGeItemId > 0 && (itemChanged || sideChanged || contextChanged))
+        {
+            queueMarketPrice(focusedGeItemId, true);
+            flushMarketPriceQueue();
         }
     }
 
     private void showGePriceEditorSuggestion()
     {
+        updateFocusedGeItem();
         Widget prompt = client.getWidget(InterfaceID.Chatbox.MES_TEXT);
         Widget parent = client.getWidget(InterfaceID.Chatbox.MES_LAYER);
         Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
@@ -2479,38 +2509,45 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             return 0;
         }
-        MarketPriceView market = marketPrices.get(itemId);
-        RuneliteOverviewView.Opportunity opportunity = exactSelectedEditorOpportunity(itemId, side);
-        if (opportunity == null)
-        {
-            opportunity = overview.opportunityForItem(itemId);
-        }
-        LastTradePriceView priceTest = lastTradePrices.snapshot().get(itemId);
-        return FlipPriceResolver.editorPrice(side, opportunity, market, priceTest);
+        return resolveSelectedGeOpportunity(itemId, side).price(side);
     }
 
-    private RuneliteOverviewView.Opportunity exactSelectedEditorOpportunity(int itemId, String side)
+    private SelectedGeOpportunityResolver.Resolution resolveSelectedGeOpportunity(
+        int itemId,
+        String side)
     {
-        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
-        GrandExchangeOffer selectedOffer = selectedGeOffer();
+        boolean focusedSelection = itemId == focusedGeItemId && Objects.equals(side, focusedGeSide);
+        FocusedGeItemResolver.EditorContext context = focusedSelection
+            ? focusedGeContext
+            : FocusedGeItemResolver.EditorContext.NEW_SETUP;
+        FlipperOfferView exact = context == FocusedGeItemResolver.EditorContext.EXISTING_OFFER
+            ? exactSelectedOffer(itemId, side, focusedExistingSlot)
+            : null;
+        return SelectedGeOpportunityResolver.resolve(
+            context,
+            itemId,
+            side,
+            overview.opportunityForItem(itemId),
+            marketPrices.get(itemId),
+            lastTradePrices.snapshot().get(itemId),
+            exact);
+    }
+
+    private FlipperOfferView exactSelectedOffer(int itemId, String side, int selectedSlot)
+    {
         SlotSnapshot snapshot = slotSnapshots.get(selectedSlot);
+        GrandExchangeOffer selectedOffer = geOfferAtSlot(selectedSlot);
         if (snapshot == null || "empty".equals(snapshot.status))
         {
             return null;
         }
-        FlipperOfferView exact = FocusedGeItemResolver.exactSelectedOffer(
+        return FocusedGeItemResolver.exactSelectedOffer(
             selectedSlot,
             selectedOfferItemId(selectedOffer),
             selectedOffer == null ? null : selectedOffer.getState(),
             itemId,
             side,
             Collections.singletonList(offerView(snapshot)));
-        return exact == null
-            ? null
-            : OsrsFlipperSyncPanel.activeOfferOpportunity(
-                itemId,
-                side,
-                Collections.singletonList(exact));
     }
 
     private FlipperOfferView offerView(SlotSnapshot snapshot)
@@ -2647,10 +2684,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return 0;
     }
 
-    private GrandExchangeOffer selectedGeOffer()
+    private GrandExchangeOffer geOfferAtSlot(int selectedSlot)
     {
         GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
-        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
         int offerIndex = FocusedGeItemResolver.selectedOfferIndex(
             selectedSlot,
             offers == null ? 0 : offers.length);
