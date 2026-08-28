@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.14";
+    private static final String PLUGIN_VERSION = "5.2.15";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -188,6 +188,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int overviewTicks;
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
+    private String focusedGeItemName = "";
     private String focusedGeSide;
     private FocusedGeItemResolver.EditorContext focusedGeContext =
         FocusedGeItemResolver.EditorContext.NONE;
@@ -233,6 +234,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewTicks = OVERVIEW_GAME_TICKS;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
+        focusedGeItemName = "";
         focusedGeSide = "";
         focusedGeContext = FocusedGeItemResolver.EditorContext.NONE;
         focusedExistingSlot = 0;
@@ -306,6 +308,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewTicks = 0;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
+        focusedGeItemName = "";
         focusedGeSide = "";
         focusedGeContext = FocusedGeItemResolver.EditorContext.NONE;
         focusedExistingSlot = 0;
@@ -526,7 +529,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             () -> clientThread.invokeLater(() -> requestOverview(true)),
             value -> clientThread.invokeLater(() -> setAccountCash(value)));
         panel.setConnectionStatus(config.connectionStatus());
-        refreshSidePanel();
+        // startUp() runs on Swing's AWT thread. RuneLite item definitions may only
+        // be read on the client thread, so the first full refresh is driven by the
+        // client-thread state/overview callbacks below instead of from here.
 
         BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
         navButton = NavigationButton.builder()
@@ -2431,6 +2436,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         boolean sideChanged = !Objects.equals(nextSide, focusedGeSide);
         boolean contextChanged = nextContext != focusedGeContext || nextExistingSlot != focusedExistingSlot;
         focusedGeItemId = nextItemId;
+        focusedGeItemName = nextItemId > 0 ? itemName(nextItemId) : "";
         focusedGeSide = nextSide;
         focusedGeContext = nextContext;
         focusedExistingSlot = nextExistingSlot;
@@ -2566,6 +2572,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         int itemId,
         String side)
     {
+        if (itemId <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
+        {
+            return SelectedGeOpportunityResolver.Resolution.empty();
+        }
         boolean focusedSelection = itemId == focusedGeItemId && Objects.equals(side, focusedGeSide);
         FocusedGeItemResolver.EditorContext context = focusedSelection
             ? focusedGeContext
@@ -2576,7 +2586,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return SelectedGeOpportunityResolver.resolve(
             context,
             itemId,
-            itemName(itemId),
+            focusedSelection ? focusedGeItemName : "",
             side,
             overview.opportunityForItem(itemId),
             marketPrices.get(itemId),
