@@ -25,7 +25,7 @@ dependencies {
 }
 
 group = 'com.osrsflipper'
-version = '5.2.13'
+version = '5.2.14'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'

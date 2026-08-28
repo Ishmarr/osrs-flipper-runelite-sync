@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.13
+# OSRS Flipper Sync v5.2.14
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -155,6 +155,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - Die vloerprijs blijft tijdens partial fills, repricing, Wiki-updates en de gekoppelde verkoop onveranderd.
 - De vloerprijs synchroniseert accountbreed via de Worker; een verkoop zonder betrouwbare koopbasis toont geen live Wiki-schatting als vloer.
 - De itemstatistieken gebruiken de duidelijke filters `Winst`, `Verlies` en `Totaal`; `Totaal` rangschikt alle niet-nul opbrengsten van hoogste winst naar grootste verlies.
+
+## Oplossing in v5.2.14
+
+- Een gepubliceerde automatische 1x1-prijstest krijgt een geldigheid van tien minuten.
+- Zodra die termijn is verstreken en lokaal geen koop- of verkooporder voor het item openstaat, vraagt RuneLite onmiddellijk de accountbrede status op; ook een lopende 1x1-test stelt die controle uit.
+- Alleen de authoritatieve Worker-reset wist de prijzen blijvend; een echte flip die op een andere gekoppelde pc nog openstaat blijft de prijstest daardoor beschermen.
+- De ontvangen tombstone wordt lokaal bewaard, zodat oude serverdata of een herstart de vervallen prijzen niet opnieuw zichtbaar maken.
 
 ## Oplossingen in v5.2.12
 

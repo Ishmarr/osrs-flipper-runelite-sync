@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.13";
+    private static final String PLUGIN_VERSION = "5.2.14";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -417,6 +417,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             requestOverview(true);
         }
+
+        requestExpiredPriceTestRefresh();
 
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
@@ -2163,6 +2165,36 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         sessionStats.reset();
         refreshSidePanel();
+    }
+
+    private void requestExpiredPriceTestRefresh()
+    {
+        if (!hasDeviceToken())
+        {
+            return;
+        }
+        Set<Integer> protectedItemIds = new HashSet<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot != null && snapshot.itemId > 0 && LastTradePriceBook.isOpenOffer(
+                snapshot.side,
+                snapshot.totalQuantity,
+                snapshot.status))
+            {
+                protectedItemIds.add(snapshot.itemId);
+            }
+        }
+        if (!lastTradePrices.markAuthoritativeExpiryRefreshDue(now(), protectedItemIds))
+        {
+            return;
+        }
+
+        // Alleen de Worker kan accountbreed vaststellen dat op geen enkele pc
+        // nog een flip openstaat. RuneLite vraagt daarom op de vervaldatum
+        // meteen diens authoritatieve prijstest/tombstone op en wist nooit op
+        // basis van uitsluitend de lokale GE-slots.
+        persistCurrentAccount();
+        requestOverview(true);
     }
 
     private void requestOverview(boolean force)
