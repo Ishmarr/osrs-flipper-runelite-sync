@@ -51,8 +51,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final float DETAIL_FONT_SIZE = 15f;
     private static final float ACTIVE_PRICE_FONT_SIZE = 17f;
     private static final float TAB_FONT_SIZE = 13f;
+    private static final float SLOT_TIMER_FONT_SIZE = 14f;
     private static final int DETAIL_ROW_HEIGHT = 27;
     private static final int ACTIVE_PRICE_ROW_HEIGHT = 31;
+    private static final int SLOT_TIMER_ROW_HEIGHT = 29;
     private static final int COINS_ITEM_ID = 995;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
@@ -1027,13 +1029,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
             JPanel state = new JPanel(new BorderLayout(4, 0));
             state.setOpaque(false);
-            state.setMaximumSize(new Dimension(Integer.MAX_VALUE, 29));
+            state.setMaximumSize(new Dimension(Integer.MAX_VALUE, SLOT_TIMER_ROW_HEIGHT));
             JLabel side = new JLabel("buy".equals(offer.side) ? "Koop" : "Verkoop");
             side.setForeground("buy".equals(offer.side) ? GREEN : GOLD);
             side.setFont(side.getFont().deriveFont(Font.BOLD));
             state.add(side, BorderLayout.WEST);
             elapsed.setForeground(MUTED);
-            elapsed.setFont(elapsed.getFont().deriveFont(Font.BOLD, 14f));
+            elapsed.setFont(elapsed.getFont().deriveFont(Font.BOLD, SLOT_TIMER_FONT_SIZE));
             state.add(elapsed, BorderLayout.EAST);
             panel.add(state);
             panel.add(compactMetric("Gevuld", formatNumber(offer.filledQuantity) + " / " + formatNumber(offer.totalQuantity)));

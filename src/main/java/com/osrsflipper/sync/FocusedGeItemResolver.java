@@ -1,6 +1,7 @@
 package com.osrsflipper.sync;
 
 import java.util.Locale;
+import java.util.List;
 import net.runelite.api.GrandExchangeOfferState;
 
 final class FocusedGeItemResolver
@@ -53,6 +54,37 @@ final class FocusedGeItemResolver
             return focusedItemId;
         }
         return Math.max(0, searchedItemId);
+    }
+
+    static FlipperOfferView exactSelectedOffer(
+        int selectedSlot,
+        int selectedOfferItemId,
+        GrandExchangeOfferState selectedOfferState,
+        int editorItemId,
+        String editorSide,
+        List<FlipperOfferView> candidates)
+    {
+        if (selectedSlot <= 0 || selectedOfferState == null ||
+            selectedOfferState == GrandExchangeOfferState.EMPTY ||
+            selectedOfferItemId <= 0 || selectedOfferItemId != editorItemId)
+        {
+            return null;
+        }
+        String selectedSide = resolveSide(false, "", true, selectedOfferState);
+        if (selectedSide.isEmpty() || !selectedSide.equals(editorSide) || candidates == null)
+        {
+            return null;
+        }
+        for (FlipperOfferView candidate : candidates)
+        {
+            if (candidate != null && candidate.slotNumber == selectedSlot &&
+                candidate.itemId == editorItemId && selectedSide.equals(candidate.side) &&
+                !"empty".equals(candidate.status))
+            {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     static String resolveSide(
