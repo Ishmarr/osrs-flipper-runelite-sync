@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.10";
+    private static final String PLUGIN_VERSION = "5.2.11";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -1036,8 +1036,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             captureStartMarketSnapshot(next);
             if ("buy".equals(side))
             {
-                next.suggestedBuyPrice = price;
-                next.suggestedSellPrice = suggestedSellPriceFor(itemId);
+                int currentSellCandidate = suggestedSellPriceFor(itemId);
+                OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.reprice(
+                    side,
+                    price,
+                    currentSellCandidate,
+                    sameOfferShape(previous, itemId, side, totalQuantity)
+                        ? guidance(previous)
+                        : OfferGuidanceResolver.Guidance.empty());
+                next.suggestedBuyPrice = guidance.buyPrice;
+                next.suggestedSellPrice = guidance.sellPrice;
+                next.sourceBuyOfferId = guidance.sourceBuyOfferId;
                 next.suggestedSellPricePending = needsFreshSellPriceFor(itemId);
                 if (sameOfferShape(previous, itemId, side, totalQuantity))
                 {
@@ -1047,9 +1056,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     next.startInstasellPrice = positiveOrFallback(
                         previous.startInstasellPrice,
                         next.startInstasellPrice);
-                    next.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
-                        previous.suggestedSellPrice,
-                        next.suggestedSellPrice);
                     next.suggestedSellPricePending =
                         previous.suggestedSellPricePending || next.suggestedSellPricePending;
                     next.suggestedSellPriceCapturedAt = previous.suggestedSellPriceCapturedAt;
@@ -1057,28 +1063,42 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             else
             {
-                next.suggestedBuyPrice = next.startInstasellPrice;
-                next.suggestedSellPrice = price;
-                if (previous != null && previous.itemId == itemId &&
-                    "buy".equals(previous.side) && previous.filledQuantity > 0)
+                int currentSellCandidate = suggestedSellPriceFor(itemId);
+                if (sameOfferShape(previous, itemId, side, totalQuantity))
                 {
-                    next.suggestedBuyPrice = positiveOrFallback(
-                        previous.suggestedBuyPrice,
-                        previous.price);
-                    next.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
-                        previous.suggestedSellPrice,
-                        price);
+                    OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.reprice(
+                        side,
+                        price,
+                        currentSellCandidate,
+                        guidance(previous));
+                    next.suggestedBuyPrice = guidance.buyPrice;
+                    next.suggestedSellPrice = guidance.sellPrice;
+                    next.sourceBuyOfferId = guidance.sourceBuyOfferId;
+                    next.startInstabuyPrice = positiveOrFallback(
+                        previous.startInstabuyPrice,
+                        next.startInstabuyPrice);
+                    next.startInstasellPrice = positiveOrFallback(
+                        previous.startInstasellPrice,
+                        next.startInstasellPrice);
                     next.suggestedSellPriceCapturedAt = previous.suggestedSellPriceCapturedAt;
                 }
-                else if (sameOfferShape(previous, itemId, side, totalQuantity))
+                else
                 {
-                    next.suggestedBuyPrice = positiveOrFallback(
-                        previous.suggestedBuyPrice,
-                        next.suggestedBuyPrice);
-                    next.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
-                        previous.suggestedSellPrice,
-                        price);
-                    next.suggestedSellPriceCapturedAt = previous.suggestedSellPriceCapturedAt;
+                    OfferGuidanceResolver.BuyCandidate source = OfferGuidanceResolver.selectBuyForSell(
+                        slotNumber,
+                        itemId,
+                        totalQuantity,
+                        startedAt,
+                        buyGuidanceCandidates(),
+                        linkedBuyOfferIds());
+                    OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.linkedSell(
+                        price,
+                        currentSellCandidate,
+                        next.startInstasellPrice,
+                        source);
+                    next.suggestedBuyPrice = guidance.buyPrice;
+                    next.suggestedSellPrice = guidance.sellPrice;
+                    next.sourceBuyOfferId = guidance.sourceBuyOfferId;
                 }
             }
             eventType = eventTypeFor(side, status, true, previous, next);
@@ -2102,33 +2122,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 continue;
             }
-            MarketPriceView market = marketPrices.get(snapshot.itemId);
-            RuneliteOverviewView.Opportunity liveOpportunity = overview.opportunityForItem(snapshot.itemId);
-            int liveInstantBuy = market != null && market.instantBuyPrice > 0
-                ? market.instantBuyPrice
-                : (liveOpportunity != null && liveOpportunity.instantBuy > 0
-                    ? liveOpportunity.instantBuy
-                    : snapshot.startInstabuyPrice);
-            int liveInstantSell = market != null && market.instantSellPrice > 0
-                ? market.instantSellPrice
-                : (liveOpportunity != null && liveOpportunity.instantSell > 0
-                    ? liveOpportunity.instantSell
-                    : snapshot.startInstasellPrice);
-            offers.add(new FlipperOfferView(
-                snapshot.slotNumber,
-                snapshot.itemId,
-                snapshot.itemName,
-                snapshot.side,
-                snapshot.price,
-                snapshot.totalQuantity,
-                snapshot.filledQuantity,
-                snapshot.status,
-                snapshot.startedAt,
-                snapshot.endedAt,
-                snapshot.suggestedBuyPrice,
-                snapshot.suggestedSellPrice,
-                liveInstantBuy,
-                liveInstantSell));
+            offers.add(offerView(snapshot));
         }
         offers.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
         panel.updateOffers(offers);
@@ -2486,9 +2480,68 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return 0;
         }
         MarketPriceView market = marketPrices.get(itemId);
-        RuneliteOverviewView.Opportunity opportunity = overview.opportunityForItem(itemId);
+        RuneliteOverviewView.Opportunity opportunity = exactSelectedEditorOpportunity(itemId, side);
+        if (opportunity == null)
+        {
+            opportunity = overview.opportunityForItem(itemId);
+        }
         LastTradePriceView priceTest = lastTradePrices.snapshot().get(itemId);
         return FlipPriceResolver.editorPrice(side, opportunity, market, priceTest);
+    }
+
+    private RuneliteOverviewView.Opportunity exactSelectedEditorOpportunity(int itemId, String side)
+    {
+        int selectedSlot = client.getVarbitValue(VarbitID.GE_SELECTEDSLOT);
+        GrandExchangeOffer selectedOffer = selectedGeOffer();
+        SlotSnapshot snapshot = slotSnapshots.get(selectedSlot);
+        if (snapshot == null || "empty".equals(snapshot.status))
+        {
+            return null;
+        }
+        FlipperOfferView exact = FocusedGeItemResolver.exactSelectedOffer(
+            selectedSlot,
+            selectedOfferItemId(selectedOffer),
+            selectedOffer == null ? null : selectedOffer.getState(),
+            itemId,
+            side,
+            Collections.singletonList(offerView(snapshot)));
+        return exact == null
+            ? null
+            : OsrsFlipperSyncPanel.activeOfferOpportunity(
+                itemId,
+                side,
+                Collections.singletonList(exact));
+    }
+
+    private FlipperOfferView offerView(SlotSnapshot snapshot)
+    {
+        MarketPriceView market = marketPrices.get(snapshot.itemId);
+        RuneliteOverviewView.Opportunity liveOpportunity = overview.opportunityForItem(snapshot.itemId);
+        int liveInstantBuy = market != null && market.instantBuyPrice > 0
+            ? market.instantBuyPrice
+            : (liveOpportunity != null && liveOpportunity.instantBuy > 0
+                ? liveOpportunity.instantBuy
+                : snapshot.startInstabuyPrice);
+        int liveInstantSell = market != null && market.instantSellPrice > 0
+            ? market.instantSellPrice
+            : (liveOpportunity != null && liveOpportunity.instantSell > 0
+                ? liveOpportunity.instantSell
+                : snapshot.startInstasellPrice);
+        return new FlipperOfferView(
+            snapshot.slotNumber,
+            snapshot.itemId,
+            snapshot.itemName,
+            snapshot.side,
+            snapshot.price,
+            snapshot.totalQuantity,
+            snapshot.filledQuantity,
+            snapshot.status,
+            snapshot.startedAt,
+            snapshot.endedAt,
+            snapshot.suggestedBuyPrice,
+            snapshot.suggestedSellPrice,
+            liveInstantBuy,
+            liveInstantSell);
     }
 
     private static Widget findPriceEditorSuggestion(Widget parent)
@@ -2911,6 +2964,54 @@ public class OsrsFlipperSyncPlugin extends Plugin
             previous.totalQuantity == totalQuantity;
     }
 
+    private static OfferGuidanceResolver.Guidance guidance(SlotSnapshot snapshot)
+    {
+        if (snapshot == null)
+        {
+            return OfferGuidanceResolver.Guidance.empty();
+        }
+        return new OfferGuidanceResolver.Guidance(
+            positiveOrFallback(snapshot.suggestedBuyPrice, snapshot.price),
+            snapshot.suggestedSellPrice,
+            snapshot.sourceBuyOfferId);
+    }
+
+    private List<OfferGuidanceResolver.BuyCandidate> buyGuidanceCandidates()
+    {
+        List<OfferGuidanceResolver.BuyCandidate> candidates = new ArrayList<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || !"buy".equals(snapshot.side))
+            {
+                continue;
+            }
+            candidates.add(new OfferGuidanceResolver.BuyCandidate(
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.filledQuantity,
+                snapshot.startedAt,
+                snapshot.lastEventAt,
+                snapshot.offerId,
+                positiveOrFallback(snapshot.suggestedBuyPrice, snapshot.price),
+                snapshot.suggestedSellPrice));
+        }
+        return candidates;
+    }
+
+    private Set<String> linkedBuyOfferIds()
+    {
+        Set<String> linked = new HashSet<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot != null && "sell".equals(snapshot.side) &&
+                !isBlank(snapshot.sourceBuyOfferId))
+            {
+                linked.add(snapshot.sourceBuyOfferId);
+            }
+        }
+        return linked;
+    }
+
     private static int positiveOrFallback(int preferred, int fallback)
     {
         return preferred > 0 ? preferred : Math.max(0, fallback);
@@ -3005,7 +3106,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             state.totalQuantity + "|" + state.filledQuantity + "|" + state.spentAmount + "|" + state.status + "|" +
             state.offerId + "|" + state.startedAt + "|" + state.endedAt + "|" +
             state.startInstabuyPrice + "|" + state.startInstasellPrice + "|" +
-            state.suggestedBuyPrice + "|" + state.suggestedSellPrice;
+            state.suggestedBuyPrice + "|" + state.suggestedSellPrice + "|" +
+            state.sourceBuyOfferId;
     }
 
     private static long nextLogicalTime(long previous)
@@ -3380,6 +3482,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long suggestedSellPriceCapturedAt;
         int startInstabuyPrice;
         int startInstasellPrice;
+        String sourceBuyOfferId;
 
         SlotSnapshot copy()
         {
@@ -3406,6 +3509,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             copy.suggestedSellPriceCapturedAt = suggestedSellPriceCapturedAt;
             copy.startInstabuyPrice = startInstabuyPrice;
             copy.startInstasellPrice = startInstasellPrice;
+            copy.sourceBuyOfferId = sourceBuyOfferId;
             return copy;
         }
 

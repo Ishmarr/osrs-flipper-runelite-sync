@@ -55,6 +55,18 @@ public class PanelLayoutRegressionTest
     }
 
     @Test
+    public void slotTimerUsesTheLargerReadableLayout() throws Exception
+    {
+        Field timerSize = OsrsFlipperSyncPanel.class.getDeclaredField("SLOT_TIMER_FONT_SIZE");
+        Field rowHeight = OsrsFlipperSyncPanel.class.getDeclaredField("SLOT_TIMER_ROW_HEIGHT");
+        timerSize.setAccessible(true);
+        rowHeight.setAccessible(true);
+
+        assertEquals(14f, timerSize.getFloat(null), 0.001f);
+        assertEquals(29, rowHeight.getInt(null));
+    }
+
+    @Test
     public void activeBuyOrSellPriceIsLargerAndBold() throws Exception
     {
         Method factory = OsrsFlipperSyncPanel.class.getDeclaredMethod(

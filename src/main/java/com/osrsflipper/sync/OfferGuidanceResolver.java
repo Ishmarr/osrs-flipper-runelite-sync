@@ -68,9 +68,9 @@ final class OfferGuidanceResolver
             : alreadyLinkedOfferIds;
         Comparator<BuyCandidate> ranking = Comparator
             .comparingInt((BuyCandidate candidate) -> candidate.filledQuantity == sellQuantity ? 1 : 0)
-            .thenComparingInt(candidate -> candidate.slotNumber == sellSlotNumber ? 1 : 0)
             .thenComparingLong(candidate -> candidate.lastEventAt)
             .thenComparingLong(candidate -> candidate.startedAt)
+            .thenComparingInt(candidate -> candidate.slotNumber == sellSlotNumber ? 1 : 0)
             .thenComparingInt(candidate -> -candidate.slotNumber)
             .thenComparing(candidate -> candidate.offerId);
         return candidates.stream()

@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.10
+# OSRS Flipper Sync v5.2.11
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -140,6 +140,14 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De live en gestopte timers in **Slots** zijn groter en vet, zodat ook langere looptijden in de smalle zijbalk goed leesbaar blijven.
 - Bij actieve offers blijven **Koop** en **Verkoop** aan het oorspronkelijke flipplan gekoppeld; alleen een beter verkoopdoel mag **Verkoop** verhogen. De afzonderlijke Wiki instabuy/instasell-regels blijven ondertussen live verversen.
 - Na afronding of annulering van een echte flip verwerkt de plugin de accountbrede server-reset van de oude 1x1-prijstest, zodat die prijzen op geen enkele gekoppelde pc terugkeren. Een latere nieuwe 1x1-test activeert ze opnieuw.
+
+## Oplossingen in v5.2.11
+
+- Een verkoopoffer koppelt zijn bevroren koopprijs nu deterministisch aan de nieuwste passende, nog niet gebruikte kooporder van hetzelfde item en aantal, ook wanneer koop en verkoop in verschillende GE-slots staan.
+- Een oude kooporder uit hetzelfde slot krijgt geen kunstmatige voorrang op een recentere passende cross-slotkoop; offer-ID's voorkomen dat één aankoopplan dubbel wordt gebruikt.
+- Een prijswijziging behoudt hetzelfde flipplan: de echte buy-orderprijs mag worden bijgewerkt, terwijl het verkoopdoel uitsluitend omhoog kan.
+- De GE-prijshelper gebruikt bij een bestaand offer exact het geselecteerde slot; bij een nieuw offer blijft hij de nieuwste live Wiki-prijs gebruiken.
+- De grotere, vetgedrukte slottimer is vastgelegd in een regressietest.
 
 ## Configuratie
 

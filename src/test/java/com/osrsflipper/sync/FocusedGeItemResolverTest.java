@@ -4,6 +4,8 @@ import net.runelite.api.GrandExchangeOfferState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 
 public class FocusedGeItemResolverTest
 {
@@ -63,6 +65,42 @@ public class FocusedGeItemResolverTest
     }
 
     @Test
+    public void priceEditorUsesOnlyTheExactSelectedActiveSlot()
+    {
+        FlipperOfferView slotOne = offer(1, 21163, "buy", 292_000, 300_000);
+        FlipperOfferView slotTwo = offer(2, 21163, "buy", 292_362, 302_073);
+
+        FlipperOfferView selected = FocusedGeItemResolver.exactSelectedOffer(
+            2,
+            21163,
+            GrandExchangeOfferState.BUYING,
+            21163,
+            "buy",
+            java.util.Arrays.asList(slotOne, slotTwo));
+
+        assertSame(slotTwo, selected);
+        RuneliteOverviewView.Opportunity active = OsrsFlipperSyncPanel.activeOfferOpportunity(
+            21163,
+            "buy",
+            java.util.Collections.singletonList(selected));
+        MarketPriceView newerMarket = new MarketPriceView(
+            21163, 310_000, 305_000, 10, 10, 10);
+        assertEquals(292_362, FlipPriceResolver.editorPrice(
+            "buy", active, newerMarket, null));
+        assertEquals(302_073, FlipPriceResolver.editorPrice(
+            "sell", active, newerMarket, null));
+        assertNull(FocusedGeItemResolver.exactSelectedOffer(
+            1, 4151, GrandExchangeOfferState.BUYING,
+            21163, "buy", java.util.Arrays.asList(slotOne, slotTwo)));
+        assertNull(FocusedGeItemResolver.exactSelectedOffer(
+            1, 21163, GrandExchangeOfferState.SELLING,
+            21163, "buy", java.util.Arrays.asList(slotOne, slotTwo)));
+        assertNull(FocusedGeItemResolver.exactSelectedOffer(
+            1, 21163, GrandExchangeOfferState.EMPTY,
+            21163, "buy", java.util.Arrays.asList(slotOne, slotTwo)));
+    }
+
+    @Test
     public void hiddenWidgetsNeverLeakAStaleItem()
     {
         assertEquals(0, FocusedGeItemResolver.resolve(false, 2434, 11840, false, 4151, 1127));
@@ -86,5 +124,18 @@ public class FocusedGeItemResolverTest
             false, "", true, GrandExchangeOfferState.SELLING));
         assertEquals("", FocusedGeItemResolver.resolveSide(
             false, "", true, GrandExchangeOfferState.EMPTY));
+    }
+
+    private static FlipperOfferView offer(
+        int slot,
+        int itemId,
+        String side,
+        int suggestedBuy,
+        int suggestedSell)
+    {
+        return new FlipperOfferView(
+            slot, itemId, "Test item", side, suggestedBuy,
+            50, 10, "active", 1, 0,
+            suggestedBuy, suggestedSell, 305_000, 290_000);
     }
 }
