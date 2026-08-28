@@ -1,6 +1,6 @@
-# Fase 4 – gewone RuneLite-client en Plugin Hub (v5.0.3)
+# Fase 4 – gewone RuneLite-client en Plugin Hub
 
-## Wat in v5 tot en met v5.0.3 veranderd is
+## Belangrijke release-eigenschappen
 
 - de tijdelijke koppelcode is uit de gewone pluginconfig verwijderd;
 - de apparaatnaam is uit de gewone pluginconfig verwijderd;
@@ -12,12 +12,12 @@
 - metadata, licentie en projectstructuur zijn voorbereid voor de RuneLite Plugin Hub;
 - de handmatige synchronisatiestatus eindigt na bevestiging op **Synchronisatie voltooid**;
 - het RuneLite-icoon is hetzelfde als het app-icoon;
-- v5.0.2 voorkomt een retry-storm bij Cloudflare 503/1102 door alle aanvragen te serialiseren en exponentieel af te remmen.
-- v5.0.3 maakt de Gradle 9-build compatibel met de RuneLite-ontwikkelstarter in `src/test`, zonder die starter als JUnit-test te behandelen.
+- geserialiseerde aanvragen en exponentiële back-off voorkomen een retry-storm bij Cloudflare 503/1102;
+- de Gradle 9-build ondersteunt de RuneLite-ontwikkelstarter in `src/test`, zonder die starter als JUnit-test te behandelen.
 
 ## Vereisten vóór publicatie
 
-Gebruik Worker v82.4 of nieuwer en voer alle stabiliteitstesten uit met de v5.0.3 IntelliJ-testclient. Publiceer pas wanneer apparaatkoppeling, onmiddellijke wijzigingen, volledige snapshots, retries en serverreconciliatie betrouwbaar werken.
+Gebruik de Worker-versie die bij de huidige RuneLite-release hoort en voer alle stabiliteitstesten uit met de huidige IntelliJ-testclient. Publiceer pas wanneer apparaatkoppeling, onmiddellijke wijzigingen, volledige snapshots, retries en serverreconciliatie betrouwbaar werken.
 
 ## Testvolgorde
 
