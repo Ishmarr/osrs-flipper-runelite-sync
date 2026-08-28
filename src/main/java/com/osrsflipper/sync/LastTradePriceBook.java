@@ -5,11 +5,13 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class LastTradePriceBook
 {
     private static final int MAX_ITEMS = 500;
     private static final long MAX_PRICE_TEST_SECONDS = 30;
+    private static final long PUBLISHED_PRICE_TEST_TTL_SECONDS = 10 * 60;
     private static final int PRICE_TEST_FORMAT_VERSION = 1;
     private final Map<Integer, Entry> entries = new LinkedHashMap<>();
 
@@ -117,6 +119,7 @@ final class LastTradePriceBook
                 entry.pendingTestBuyPrice = Math.max(0, entry.pendingTestBuyPrice);
                 entry.pendingTestBuyAt = Math.max(0, entry.pendingTestBuyAt);
                 entry.clearedAt = Math.max(0, entry.clearedAt);
+                entry.expiryRefreshForAt = Math.max(0, entry.expiryRefreshForAt);
                 if (entry.clearedAt > 0 && entry.clearedAt >= latestPriceTestAt(entry))
                 {
                     clearPublished(entry);
@@ -129,6 +132,36 @@ final class LastTradePriceBook
             }
         }
         trimOldest();
+    }
+
+    boolean markAuthoritativeExpiryRefreshDue(long now, Set<Integer> protectedItemIds)
+    {
+        boolean refreshDue = false;
+        for (Entry entry : entries.values())
+        {
+            long publishedAt = latestPriceTestAt(entry);
+            if (publishedAt <= 0 || entry.lastBuyPrice <= 0 || entry.lastSellPrice <= 0 ||
+                (entry.clearedAt > 0 && entry.clearedAt >= publishedAt) ||
+                (protectedItemIds != null && protectedItemIds.contains(entry.itemId)) ||
+                now < publishedAt || now - publishedAt < PUBLISHED_PRICE_TEST_TTL_SECONDS ||
+                // Dit onderdrukt alleen de extra controle op de 10-minutengrens.
+                // Periodieke en GE-gestuurde overviews blijven gewoon doorlopen.
+                entry.expiryRefreshForAt >= publishedAt)
+            {
+                continue;
+            }
+            entry.expiryRefreshForAt = publishedAt;
+            refreshDue = true;
+        }
+        return refreshDue;
+    }
+
+    static boolean isOpenOffer(String side, int totalQuantity, String status)
+    {
+        return totalQuantity > 0 &&
+            ("buy".equals(side) || "sell".equals(side)) &&
+            ("pending".equals(status) || "active".equals(status) ||
+                "partially_filled".equals(status));
     }
 
     Map<Integer, LastTradePriceView> snapshot()
@@ -256,5 +289,6 @@ final class LastTradePriceBook
         int pendingTestBuyPrice;
         long pendingTestBuyAt;
         long clearedAt;
+        long expiryRefreshForAt;
     }
 }

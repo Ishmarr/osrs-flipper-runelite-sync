@@ -189,4 +189,69 @@ public class LastTradePriceBookTest
         assertEquals(2_100, restored.snapshot().get(1_010).lastBuyPrice);
         assertEquals(1_800, restored.snapshot().get(1_010).lastSellPrice);
     }
+
+    @Test
+    public void requestsAuthoritativeExpiryAtTenMinutesOnlyOncePerPublishedTest()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_111, 2_000, 1_900, 100, 101)));
+
+        assertFalse(book.markAuthoritativeExpiryRefreshDue(700, Collections.emptySet()));
+        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
+        assertFalse(book.markAuthoritativeExpiryRefreshDue(702, Collections.emptySet()));
+        assertEquals(101, book.persistedEntries().get(0).expiryRefreshForAt);
+
+        LastTradePriceBook restored = new LastTradePriceBook();
+        restored.restore(book.persistedEntries().toArray(new LastTradePriceBook.Entry[0]));
+        assertFalse(restored.markAuthoritativeExpiryRefreshDue(800, Collections.emptySet()));
+
+        restored.recordTransition(1_111, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 900);
+        restored.recordTransition(1_111, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 901);
+        assertFalse(restored.markAuthoritativeExpiryRefreshDue(1_500, Collections.emptySet()));
+        assertTrue(restored.markAuthoritativeExpiryRefreshDue(1_501, Collections.emptySet()));
+    }
+
+    @Test
+    public void openRealOfferDefersAuthoritativeExpiryRefresh()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_212, 2_000, 1_900, 100, 101)));
+
+        assertFalse(book.markAuthoritativeExpiryRefreshDue(
+            701,
+            Collections.singleton(1_212)));
+        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
+    }
+
+    @Test
+    public void everyOpenBuyOrSellOfferProtectsPublishedPriceTests()
+    {
+        assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "pending"));
+        assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "active"));
+        assertTrue(LastTradePriceBook.isOpenOffer("buy", 2, "active"));
+        assertTrue(LastTradePriceBook.isOpenOffer("sell", 2, "partially_filled"));
+
+        assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "pending"));
+        assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "active"));
+        assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "completed"));
+        assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "cancelled"));
+        assertFalse(LastTradePriceBook.isOpenOffer("unknown", 2, "active"));
+    }
+
+    @Test
+    public void expiryRefreshMarkerNeverBlocksAuthoritativeTombstone()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_313, 2_000, 1_900, 100, 101)));
+        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
+
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_313, 0, 0, 0, 0, 701)));
+
+        assertFalse(book.snapshot().containsKey(1_313));
+        assertEquals(701, book.persistedEntries().get(0).clearedAt);
+    }
 }

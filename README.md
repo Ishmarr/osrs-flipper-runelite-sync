@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.13
+# OSRS Flipper Sync v5.2.14
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -16,7 +16,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
 - haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;
 - toont per periode welke items de gerealiseerde winst en het verlies hebben veroorzaakt;
-- laat die itemopbrengsten sorteren op **Meeste winst** of **Meeste verlies**;
+- laat die itemopbrengsten sorteren op **Winst**, **Verlies** of **Totaal**;
 - deelt geldige 1x1-prijstesten en de cashstack accountbreed met alle gekoppelde pc's;
 - laat de beschikbare cashstack rechtstreeks in RuneLite instellen;
 - toont de actuele verbindingsstatus;
@@ -149,6 +149,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De GE-prijshelper gebruikt bij een bestaand offer exact het geselecteerde slot; bij een nieuw offer blijft hij de nieuwste live Wiki-prijs gebruiken.
 - De grotere, vetgedrukte slottimer is vastgelegd in een regressietest.
 
+## Oplossingen in v5.2.12
+
+- Een nieuw GE-setupscherm en het bewerken van een exact bestaand offer hebben nu een expliciet gescheiden context; een achtergebleven geselecteerd-slotnummer kan daardoor geen oud bevroren plan in een nieuw offer lekken.
+- De geselecteerde Flip-kaart en de klikbare prijsregel in het GE-invoervenster gebruiken dezelfde centrale resolutie en tonen daardoor altijd dezelfde koop- of verkoopprijs.
+- Bij een nieuw offer worden de scannergegevens direct gecombineerd met de meest recente Wiki instabuy en instasell uit de lokale live-prijscache.
+- Bij een werkelijk geopend bestaand offer blijven Koop en Verkoop uit exact dat slot bevroren, terwijl de afzonderlijke Wiki-prijzen live blijven verversen.
+
 ## Oplossingen in v5.2.13
 
 - `Lowest price` wordt bij het eerste koopoffer één keer inclusief GE-tax berekend.
@@ -156,12 +163,15 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De vloerprijs synchroniseert accountbreed via de Worker; een verkoop zonder betrouwbare koopbasis toont geen live Wiki-schatting als vloer.
 - De itemstatistieken gebruiken de duidelijke filters `Winst`, `Verlies` en `Totaal`; `Totaal` rangschikt alle niet-nul opbrengsten van hoogste winst naar grootste verlies.
 
-## Oplossingen in v5.2.12
+## Oplossingen in v5.2.14
 
-- Een nieuw GE-setupscherm en het bewerken van een exact bestaand offer hebben nu een expliciet gescheiden context; een achtergebleven geselecteerd-slotnummer kan daardoor geen oud bevroren plan in een nieuw offer lekken.
-- De geselecteerde Flip-kaart en de klikbare prijsregel in het GE-invoervenster gebruiken dezelfde centrale resolutie en tonen daardoor altijd dezelfde koop- of verkoopprijs.
-- Bij een nieuw offer worden de scannergegevens direct gecombineerd met de meest recente Wiki instabuy en instasell uit de lokale live-prijscache.
-- Bij een werkelijk geopend bestaand offer blijven Koop en Verkoop uit exact dat slot bevroren, terwijl de afzonderlijke Wiki-prijzen live blijven verversen.
+- Een gepubliceerde automatische 1x1-prijstest krijgt een geldigheid van tien minuten.
+- Zodra die termijn is verstreken en lokaal geen koop- of verkooporder voor het item openstaat, vraagt RuneLite onmiddellijk de accountbrede status op; ook een lopende 1x1-test stelt die controle uit.
+- Alleen de authoritatieve Worker-reset wist de prijzen blijvend; een echte flip die op een andere gekoppelde pc nog openstaat blijft de prijstest daardoor beschermen.
+- De ontvangen tombstone wordt lokaal bewaard, zodat oude serverdata of een herstart de vervallen prijzen niet opnieuw zichtbaar maken.
+- Een geopend nieuw GE-item blijft met zijn RuneLite-itemnaam en actuele Wiki-prijzen zichtbaar wanneer de Worker tijdelijk geen scannerkans levert; zonder scanner worden geen hoeveelheden of winsten verzonnen.
+- De blauwe Wiki-prijzen van actieve slots en het gefocuste item worden periodiek opnieuw opgehaald en de gedeelde HTTP-cache wordt daarbij herbevestigd; de bevroren waarden voor **Koop**, **Verkoop** en **Lowest price** blijven onveranderd.
+- Ook een offer met status `pending` beschermt de bestaande 1x1-prijstest tegen verval.
 
 ## Configuratie
 

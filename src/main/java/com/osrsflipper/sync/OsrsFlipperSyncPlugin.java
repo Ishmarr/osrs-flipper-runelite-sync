@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.13";
+    private static final String PLUGIN_VERSION = "5.2.14";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -417,6 +417,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             requestOverview(true);
         }
+
+        requestExpiredPriceTestRefresh();
 
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
@@ -2165,6 +2167,36 @@ public class OsrsFlipperSyncPlugin extends Plugin
         refreshSidePanel();
     }
 
+    private void requestExpiredPriceTestRefresh()
+    {
+        if (!hasDeviceToken())
+        {
+            return;
+        }
+        Set<Integer> protectedItemIds = new HashSet<>();
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot != null && snapshot.itemId > 0 && LastTradePriceBook.isOpenOffer(
+                snapshot.side,
+                snapshot.totalQuantity,
+                snapshot.status))
+            {
+                protectedItemIds.add(snapshot.itemId);
+            }
+        }
+        if (!lastTradePrices.markAuthoritativeExpiryRefreshDue(now(), protectedItemIds))
+        {
+            return;
+        }
+
+        // Alleen de Worker kan accountbreed vaststellen dat op geen enkele pc
+        // nog een flip openstaat. RuneLite vraagt daarom op de vervaldatum
+        // meteen diens authoritatieve prijstest/tombstone op en wist nooit op
+        // basis van uitsluitend de lokale GE-slots.
+        persistCurrentAccount();
+        requestOverview(true);
+    }
+
     private void requestOverview(boolean force)
     {
         if (!started || !hasDeviceToken())
@@ -2544,6 +2576,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return SelectedGeOpportunityResolver.resolve(
             context,
             itemId,
+            itemName(itemId),
             side,
             overview.opportunityForItem(itemId),
             marketPrices.get(itemId),
@@ -2795,6 +2828,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 queueMarketPrice(snapshot.itemId, force || snapshot.suggestedSellPricePending);
             }
         }
+        if (focusedGeItemId > 0)
+        {
+            queueMarketPrice(focusedGeItemId, force);
+        }
         flushMarketPriceQueue();
     }
 
@@ -2828,18 +2865,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         queuedMarketPriceItems.remove(itemId);
 
-        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
-        if (base == null)
+        Request request = wikiMarketPriceRequest(itemId);
+        if (request == null)
         {
             return;
         }
-        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
-        Request request = new Request.Builder()
-            .url(url)
-            .get()
-            .header("Accept", "application/json")
-            .header("User-Agent", WIKI_USER_AGENT)
-            .build();
 
         marketPriceInFlight = true;
         httpClient.newCall(request).enqueue(new Callback()
@@ -2864,6 +2894,25 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 clientThread.invokeLater(() -> handleMarketPriceResponse(itemId, statusCode, body));
             }
         });
+    }
+
+    static Request wikiMarketPriceRequest(int itemId)
+    {
+        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
+        if (itemId <= 0 || base == null)
+        {
+            return null;
+        }
+        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
+        // De gedeelde RuneLite-client mag de vorige response bewaren; live prijzen
+        // moeten bij iedere geplande fetch opnieuw worden gevalideerd.
+        return new Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", WIKI_USER_AGENT)
+            .header("Cache-Control", "no-cache")
+            .build();
     }
 
     private void handleMarketPriceResponse(int itemId, int statusCode, String body)
