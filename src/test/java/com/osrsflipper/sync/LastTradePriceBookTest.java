@@ -228,10 +228,12 @@ public class LastTradePriceBookTest
     @Test
     public void everyOpenBuyOrSellOfferProtectsPublishedPriceTests()
     {
+        assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "pending"));
         assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "active"));
         assertTrue(LastTradePriceBook.isOpenOffer("buy", 2, "active"));
         assertTrue(LastTradePriceBook.isOpenOffer("sell", 2, "partially_filled"));
 
+        assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "pending"));
         assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "active"));
         assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "completed"));
         assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "cancelled"));

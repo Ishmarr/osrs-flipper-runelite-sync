@@ -2576,6 +2576,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return SelectedGeOpportunityResolver.resolve(
             context,
             itemId,
+            itemName(itemId),
             side,
             overview.opportunityForItem(itemId),
             marketPrices.get(itemId),
@@ -2827,6 +2828,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 queueMarketPrice(snapshot.itemId, force || snapshot.suggestedSellPricePending);
             }
         }
+        if (focusedGeItemId > 0)
+        {
+            queueMarketPrice(focusedGeItemId, force);
+        }
         flushMarketPriceQueue();
     }
 
@@ -2860,18 +2865,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         queuedMarketPriceItems.remove(itemId);
 
-        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
-        if (base == null)
+        Request request = wikiMarketPriceRequest(itemId);
+        if (request == null)
         {
             return;
         }
-        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
-        Request request = new Request.Builder()
-            .url(url)
-            .get()
-            .header("Accept", "application/json")
-            .header("User-Agent", WIKI_USER_AGENT)
-            .build();
 
         marketPriceInFlight = true;
         httpClient.newCall(request).enqueue(new Callback()
@@ -2896,6 +2894,25 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 clientThread.invokeLater(() -> handleMarketPriceResponse(itemId, statusCode, body));
             }
         });
+    }
+
+    static Request wikiMarketPriceRequest(int itemId)
+    {
+        HttpUrl base = HttpUrl.parse(WIKI_LATEST_URL);
+        if (itemId <= 0 || base == null)
+        {
+            return null;
+        }
+        HttpUrl url = base.newBuilder().addQueryParameter("id", Integer.toString(itemId)).build();
+        // De gedeelde RuneLite-client mag de vorige response bewaren; live prijzen
+        // moeten bij iedere geplande fetch opnieuw worden gevalideerd.
+        return new Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", WIKI_USER_AGENT)
+            .header("Cache-Control", "no-cache")
+            .build();
     }
 
     private void handleMarketPriceResponse(int itemId, int statusCode, String body)

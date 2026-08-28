@@ -13,6 +13,7 @@ final class SelectedGeOpportunityResolver
     static Resolution resolve(
         FocusedGeItemResolver.EditorContext context,
         int itemId,
+        String itemName,
         String side,
         RuneliteOverviewView.Opportunity scannerOpportunity,
         MarketPriceView market,
@@ -57,38 +58,47 @@ final class SelectedGeOpportunityResolver
         {
             return Resolution.empty();
         }
-        if (scannerOpportunity == null)
+
+        boolean matchingMarket = market != null && market.itemId == itemId;
+        int marketInstantBuy = matchingMarket ? market.instantBuyPrice : 0;
+        int marketInstantSell = matchingMarket ? market.instantSellPrice : 0;
+        if (scannerOpportunity == null && marketInstantBuy <= 0 && marketInstantSell <= 0)
         {
             return Resolution.empty();
         }
 
-        int instantBuy = market != null && market.instantBuyPrice > 0
-            ? market.instantBuyPrice
-            : scannerOpportunity.instantBuy;
-        int instantSell = market != null && market.instantSellPrice > 0
-            ? market.instantSellPrice
-            : scannerOpportunity.instantSell;
-        int fallbackBuy = scannerOpportunity.buyPrice;
-        int fallbackSell = scannerOpportunity.sellPrice;
+        int instantBuy = marketInstantBuy > 0
+            ? marketInstantBuy
+            : (scannerOpportunity == null ? 0 : scannerOpportunity.instantBuy);
+        int instantSell = marketInstantSell > 0
+            ? marketInstantSell
+            : (scannerOpportunity == null ? 0 : scannerOpportunity.instantSell);
+        int fallbackBuy = scannerOpportunity == null ? 0 : scannerOpportunity.buyPrice;
+        int fallbackSell = scannerOpportunity == null ? 0 : scannerOpportunity.sellPrice;
         int buyPrice = FlipPriceResolver.buyPrice(instantSell, fallbackBuy, priceTest);
         int sellPrice = FlipPriceResolver.sellPrice(instantBuy, fallbackSell, priceTest);
-        long priceUpdatedAt = market == null
-            ? scannerOpportunity.priceUpdatedAt
+        long priceUpdatedAt = !matchingMarket
+            ? (scannerOpportunity == null ? 0 : scannerOpportunity.priceUpdatedAt)
             : Math.max(market.instantBuyAt, market.instantSellAt);
+        String resolvedItemName = itemName == null ? "" : itemName.trim();
+        if (resolvedItemName.isEmpty() && scannerOpportunity != null)
+        {
+            resolvedItemName = scannerOpportunity.itemName;
+        }
 
         RuneliteOverviewView.Opportunity resolved = new RuneliteOverviewView.Opportunity(
             itemId,
-            scannerOpportunity.itemName,
+            resolvedItemName,
             SELECTED_SETUP,
             buyPrice,
             sellPrice,
             instantBuy,
             instantSell,
-            scannerOpportunity.expectedQuantity,
-            scannerOpportunity.expectedProfit,
-            scannerOpportunity.maximumQuantity,
-            scannerOpportunity.maximumProfitPerHour,
-            scannerOpportunity.maximumCycleProfit,
+            scannerOpportunity == null ? 0 : scannerOpportunity.expectedQuantity,
+            scannerOpportunity == null ? 0 : scannerOpportunity.expectedProfit,
+            scannerOpportunity == null ? 0 : scannerOpportunity.maximumQuantity,
+            scannerOpportunity == null ? 0 : scannerOpportunity.maximumProfitPerHour,
+            scannerOpportunity == null ? 0 : scannerOpportunity.maximumCycleProfit,
             priceUpdatedAt);
         return new Resolution(resolved);
     }

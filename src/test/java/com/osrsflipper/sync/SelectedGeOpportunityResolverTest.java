@@ -27,6 +27,7 @@ public class SelectedGeOpportunityResolverTest
             SelectedGeOpportunityResolver.resolve(
                 FocusedGeItemResolver.EditorContext.NEW_SETUP,
                 101,
+                "Dragon crossbow",
                 "sell",
                 scanner(),
                 new MarketPriceView(101, 656_461, 651_000, 20, 21, 22),
@@ -38,20 +39,45 @@ public class SelectedGeOpportunityResolverTest
     }
 
     @Test
-    public void newSetupOutsideScannerRulesRemainsEmpty()
+    public void newSetupOutsideScannerRulesUsesLiveWikiPricesAndLastPriceTests()
     {
         SelectedGeOpportunityResolver.Resolution resolved =
             SelectedGeOpportunityResolver.resolve(
                 FocusedGeItemResolver.EditorContext.NEW_SETUP,
                 101,
-                "sell",
+                "Dragon arrow(p++)",
+                "buy",
                 null,
                 new MarketPriceView(101, 656_461, 651_000, 20, 21, 22),
-                null,
+                new LastTradePriceView(101, 660_000, 652_000, 30, 31),
                 activeSell(640_000, 700_000, 654_689, 650_000));
 
+        assertEquals("Dragon arrow(p++)", resolved.opportunity.itemName);
+        assertEquals("selected_setup", resolved.opportunity.ranking);
+        assertEquals(656_461, resolved.opportunity.instantBuy);
+        assertEquals(651_000, resolved.opportunity.instantSell);
+        assertEquals(652_001, resolved.price("buy"));
+        assertEquals(659_999, resolved.price("sell"));
+        assertEquals(0, resolved.opportunity.maximumQuantity);
+        assertEquals(0, resolved.opportunity.maximumCycleProfit);
+    }
+
+    @Test
+    public void newSetupWithoutScannerOrWikiPricesRemainsEmpty()
+    {
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                101,
+                "Dragon arrow(p++)",
+                "buy",
+                null,
+                null,
+                new LastTradePriceView(101, 660_000, 652_000, 30, 31),
+                null);
+
         assertNull(resolved.opportunity);
-        assertEquals(0, resolved.price("sell"));
+        assertEquals(0, resolved.price("buy"));
     }
 
     @Test
@@ -62,6 +88,7 @@ public class SelectedGeOpportunityResolverTest
             SelectedGeOpportunityResolver.resolve(
                 FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
                 101,
+                "Dragon crossbow",
                 "sell",
                 scanner(),
                 new MarketPriceView(101, 900_000, 500_000, 20, 21, 22),
@@ -75,6 +102,39 @@ public class SelectedGeOpportunityResolverTest
     }
 
     @Test
+    public void liveWikiRefreshDoesNotMoveAnExistingOffersFrozenPlan()
+    {
+        FlipperOfferView active = activeBuy(934, 1_244, 1_293, 934, 953);
+        SelectedGeOpportunityResolver.Resolution first =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                101,
+                "Lassar teleport",
+                "buy",
+                scanner(),
+                new MarketPriceView(101, 1_293, 934, 20, 21, 22),
+                null,
+                active);
+        SelectedGeOpportunityResolver.Resolution refreshed =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                101,
+                "Lassar teleport",
+                "buy",
+                scanner(),
+                new MarketPriceView(101, 1_245, 934, 30, 31, 32),
+                null,
+                active);
+
+        assertEquals(1_293, first.opportunity.instantBuy);
+        assertEquals(1_245, refreshed.opportunity.instantBuy);
+        assertEquals(934, refreshed.opportunity.instantSell);
+        assertEquals(934, refreshed.opportunity.buyPrice);
+        assertEquals(1_244, refreshed.opportunity.sellPrice);
+        assertEquals(953, refreshed.opportunity.lowestSellPrice);
+    }
+
+    @Test
     public void existingOfferKeepsFrozenLowestPriceWhileNewSetupHasNoStoredFloor()
     {
         FlipperOfferView active = new FlipperOfferView(
@@ -85,6 +145,7 @@ public class SelectedGeOpportunityResolverTest
             SelectedGeOpportunityResolver.resolve(
                 FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
                 101,
+                "Dragon crossbow",
                 "sell",
                 scanner(),
                 new MarketPriceView(101, 900_000, 500_000, 20, 21, 22),
@@ -145,6 +206,7 @@ public class SelectedGeOpportunityResolverTest
         return SelectedGeOpportunityResolver.resolve(
             FocusedGeItemResolver.EditorContext.NEW_SETUP,
             101,
+            "Dragon crossbow",
             "sell",
             scanner(),
             market,
@@ -191,5 +253,30 @@ public class SelectedGeOpportunityResolverTest
             sellPrice,
             instantBuy,
             instantSell);
+    }
+
+    private static FlipperOfferView activeBuy(
+        int buyPrice,
+        int sellPrice,
+        int instantBuy,
+        int instantSell,
+        int lowestSellPrice)
+    {
+        return new FlipperOfferView(
+            2,
+            101,
+            "Lassar teleport",
+            "buy",
+            buyPrice,
+            100,
+            0,
+            "active",
+            1,
+            0,
+            buyPrice,
+            sellPrice,
+            instantBuy,
+            instantSell,
+            lowestSellPrice);
     }
 }

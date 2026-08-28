@@ -160,7 +160,8 @@ final class LastTradePriceBook
     {
         return totalQuantity > 0 &&
             ("buy".equals(side) || "sell".equals(side)) &&
-            ("active".equals(status) || "partially_filled".equals(status));
+            ("pending".equals(status) || "active".equals(status) ||
+                "partially_filled".equals(status));
     }
 
     Map<Integer, LastTradePriceView> snapshot()
