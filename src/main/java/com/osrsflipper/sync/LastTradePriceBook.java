@@ -62,6 +62,10 @@ final class LastTradePriceBook
         entry.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
         if ("buy".equals(side))
         {
+            if (eventAt <= entry.clearedAt)
+            {
+                return;
+            }
             entry.pendingTestBuyPrice = unitPrice;
             entry.pendingTestBuyAt = Math.max(0, eventAt);
         }
@@ -77,6 +81,7 @@ final class LastTradePriceBook
                 entry.lastSellPrice = unitPrice;
                 entry.lastBuyAt = entry.pendingTestBuyAt;
                 entry.lastSellAt = sellAt;
+                entry.clearedAt = 0;
             }
             clearPending(entry);
         }
@@ -111,6 +116,15 @@ final class LastTradePriceBook
                 entry.lastSellAt = Math.max(0, entry.lastSellAt);
                 entry.pendingTestBuyPrice = Math.max(0, entry.pendingTestBuyPrice);
                 entry.pendingTestBuyAt = Math.max(0, entry.pendingTestBuyAt);
+                entry.clearedAt = Math.max(0, entry.clearedAt);
+                if (entry.clearedAt > 0 && entry.clearedAt >= latestPriceTestAt(entry))
+                {
+                    clearPublished(entry);
+                    if (entry.pendingTestBuyAt <= entry.clearedAt)
+                    {
+                        clearPending(entry);
+                    }
+                }
                 entries.put(entry.itemId, entry);
             }
         }
@@ -122,12 +136,17 @@ final class LastTradePriceBook
         Map<Integer, LastTradePriceView> result = new LinkedHashMap<>();
         for (Entry entry : entries.values())
         {
+            if (entry.clearedAt > 0 && entry.clearedAt >= latestPriceTestAt(entry))
+            {
+                continue;
+            }
             result.put(entry.itemId, new LastTradePriceView(
                 entry.itemId,
                 entry.lastBuyPrice,
                 entry.lastSellPrice,
                 entry.lastBuyAt,
-                entry.lastSellAt));
+                entry.lastSellAt,
+                entry.clearedAt));
         }
         return result;
     }
@@ -140,25 +159,46 @@ final class LastTradePriceBook
         }
         for (LastTradePriceView server : serverEntries)
         {
-            if (server == null || server.itemId <= 0 ||
-                server.lastBuyPrice <= 0 || server.lastSellPrice <= 0)
+            if (server == null || server.itemId <= 0)
             {
                 continue;
             }
             Entry local = entries.get(server.itemId);
-            long serverAt = Math.max(server.lastBuyAt, server.lastSellAt);
-            long localAt = local == null ? 0 : Math.max(local.lastBuyAt, local.lastSellAt);
+            long serverPriceAt = Math.max(server.lastBuyAt, server.lastSellAt);
+            long serverAt = Math.max(serverPriceAt, server.clearedAt);
+            Entry merged = local == null ? new Entry() : local;
+            merged.itemId = server.itemId;
+            merged.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
+            if (server.clearedAt > 0 && server.clearedAt >= serverPriceAt)
+            {
+                if (latestPriceTestAt(merged) <= server.clearedAt)
+                {
+                    clearPublished(merged);
+                }
+                if (merged.pendingTestBuyAt <= server.clearedAt)
+                {
+                    clearPending(merged);
+                }
+                merged.clearedAt = Math.max(merged.clearedAt, server.clearedAt);
+                entries.put(server.itemId, merged);
+                continue;
+            }
+            long localAt = local == null ? 0 : Math.max(
+                Math.max(latestPriceTestAt(local), local.pendingTestBuyAt),
+                local.clearedAt);
             if (local != null && localAt > serverAt)
             {
                 continue;
             }
-            Entry merged = local == null ? new Entry() : local;
-            merged.itemId = server.itemId;
-            merged.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
+            if (server.lastBuyPrice <= 0 || server.lastSellPrice <= 0)
+            {
+                continue;
+            }
             merged.lastBuyPrice = server.lastBuyPrice;
             merged.lastSellPrice = server.lastSellPrice;
             merged.lastBuyAt = server.lastBuyAt;
             merged.lastSellAt = server.lastSellAt;
+            merged.clearedAt = server.clearedAt;
             clearPending(merged);
             entries.put(server.itemId, merged);
         }
@@ -177,7 +217,7 @@ final class LastTradePriceBook
             Integer oldest = entries.values().stream()
                 .min(Comparator.comparingLong(entry -> Math.max(
                     Math.max(entry.lastBuyAt, entry.lastSellAt),
-                    entry.pendingTestBuyAt)))
+                    Math.max(entry.pendingTestBuyAt, entry.clearedAt))))
                 .map(entry -> entry.itemId)
                 .orElse(null);
             if (oldest == null)
@@ -186,6 +226,23 @@ final class LastTradePriceBook
             }
             entries.remove(oldest);
         }
+    }
+
+    private static long latestPriceTestAt(Entry entry)
+    {
+        return entry == null ? 0 : Math.max(entry.lastBuyAt, entry.lastSellAt);
+    }
+
+    private static void clearPublished(Entry entry)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+        entry.lastBuyPrice = 0;
+        entry.lastSellPrice = 0;
+        entry.lastBuyAt = 0;
+        entry.lastSellAt = 0;
     }
 
     static final class Entry
@@ -198,5 +255,6 @@ final class LastTradePriceBook
         long lastSellAt;
         int pendingTestBuyPrice;
         long pendingTestBuyAt;
+        long clearedAt;
     }
 }

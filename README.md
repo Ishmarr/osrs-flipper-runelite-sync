@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.9
+# OSRS Flipper Sync v5.2.10
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -127,9 +127,19 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - Het hoeveelheidsvenster achter de linker GE-knop met drie puntjes toont een eigen goudkleurige, klikbare regel met het aanbevolen aantal uit de Flip-kaart.
 - Dat aantal gebruikt exact de bestaande scannergrenzen voor vrije cash, resterende buy limit en maximaal één uur koopvolume.
 - Een klik op de regel vult het aanbevolen aantal meteen in als GE-hoeveelheid.
-- Een gestart koopoffer bevriest de getoonde koopprijs en Wiki-startprijzen accountbreed; een live scannerrefresh kan ze niet meer verschuiven.
+- Een gestart koopoffer bevriest de getoonde koopprijs en bewaart de Wiki-startprijzen intern; de afzonderlijk getoonde Wiki-regels blijven live verversen.
 - Het verkoopdoel begint bij de beste prijs van het startmoment en mag tijdens hetzelfde offer uitsluitend omhoog, nooit omlaag.
 - De eigen prijsregel kiest automatisch de hoogste vrije regel in het GE-invoervenster en overlapt daardoor niet onnodig met andere pluginregels.
+
+## Nieuw in v5.2.10
+
+- Iedere kaart in **Flips** toont onderaan **Winst/item** op basis van de getoonde koop- en verkoopprijs.
+- De berekening trekt de officiële 2% GE-tax af, inclusief dezelfde minimumprijs-, bond- en taxcapregels als de webapp.
+- Een positieve of break-even waarde is groen; verlies per item is rood.
+- De chathelper voor de GE-prijsknop gebruikt hetzelfde werkelijk geopende item als de Flip-kaart; een verouderd RuneLite-zoekitem kan de koopprijs niet meer door een prijs van een ander item vervangen.
+- De live en gestopte timers in **Slots** zijn groter en vet, zodat ook langere looptijden in de smalle zijbalk goed leesbaar blijven.
+- Bij actieve offers blijven **Koop** en **Verkoop** aan het oorspronkelijke flipplan gekoppeld; alleen een beter verkoopdoel mag **Verkoop** verhogen. De afzonderlijke Wiki instabuy/instasell-regels blijven ondertussen live verversen.
+- Na afronding of annulering van een echte flip verwerkt de plugin de accountbrede server-reset van de oude 1x1-prijstest, zodat die prijzen op geen enkele gekoppelde pc terugkeren. Een latere nieuwe 1x1-test activeert ze opnieuw.
 
 ## Configuratie
 

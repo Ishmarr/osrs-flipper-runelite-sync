@@ -42,6 +42,19 @@ final class FocusedGeItemResolver
         return index >= 0 && index < offerCount ? index : -1;
     }
 
+    static int priceEditorItemId(int setupItemId, int focusedItemId, int searchedItemId)
+    {
+        if (setupItemId > 0)
+        {
+            return setupItemId;
+        }
+        if (focusedItemId > 0)
+        {
+            return focusedItemId;
+        }
+        return Math.max(0, searchedItemId);
+    }
+
     static String resolveSide(
         boolean setupVisible,
         String setupText,

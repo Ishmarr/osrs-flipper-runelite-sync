@@ -5,6 +5,8 @@ import java.util.Collections;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class LastTradePriceBookTest
 {
@@ -100,5 +102,91 @@ public class LastTradePriceBookTest
 
         assertEquals(2_100, book.snapshot().get(505).lastBuyPrice);
         assertEquals(1_800, book.snapshot().get(505).lastSellPrice);
+    }
+
+    @Test
+    public void authoritativeTombstoneClearsBothPricesAndBlocksOlderServerData()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(606, 2_000, 1_900, 100, 101)));
+
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(606, 0, 0, 0, 0, 200)));
+        assertFalse(book.snapshot().containsKey(606));
+
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(606, 2_000, 1_900, 100, 101)));
+        assertFalse(book.snapshot().containsKey(606));
+        assertEquals(200, book.persistedEntries().get(0).clearedAt);
+    }
+
+    @Test
+    public void laterOneByOnePriceTestReactivatesAResetItem()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(707, 0, 0, 0, 0, 200)));
+
+        book.recordTransition(707, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.recordTransition(707, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertTrue(book.snapshot().containsKey(707));
+        assertEquals(2_100, book.snapshot().get(707).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(707).lastSellPrice);
+    }
+
+    @Test
+    public void persistsAndRestoresAnAuthoritativeTombstone()
+    {
+        LastTradePriceBook original = new LastTradePriceBook();
+        original.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(808, 0, 0, 0, 0, 500)));
+
+        LastTradePriceBook restored = new LastTradePriceBook();
+        restored.restore(original.persistedEntries().toArray(new LastTradePriceBook.Entry[0]));
+
+        assertFalse(restored.snapshot().containsKey(808));
+        assertEquals(500, restored.persistedEntries().get(0).clearedAt);
+    }
+
+    @Test
+    public void resetClearsOldPublishedPricesButKeepsANewerPendingTest()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(909, 2_000, 1_900, 100, 101)));
+        book.recordTransition(909, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(909, 0, 0, 0, 0, 200)));
+        assertFalse(book.snapshot().containsKey(909));
+
+        book.recordTransition(909, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+        assertEquals(2_100, book.snapshot().get(909).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(909).lastSellPrice);
+    }
+
+    @Test
+    public void restartKeepsAPendingTestThatIsNewerThanTheTombstone()
+    {
+        LastTradePriceBook.Entry entry = new LastTradePriceBook.Entry();
+        entry.itemId = 1_010;
+        entry.priceTestVersion = 1;
+        entry.lastBuyPrice = 2_000;
+        entry.lastSellPrice = 1_900;
+        entry.lastBuyAt = 100;
+        entry.lastSellAt = 101;
+        entry.clearedAt = 200;
+        entry.pendingTestBuyPrice = 2_100;
+        entry.pendingTestBuyAt = 300;
+
+        LastTradePriceBook restored = new LastTradePriceBook();
+        restored.restore(new LastTradePriceBook.Entry[]{entry});
+        restored.recordTransition(
+            1_010, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertEquals(2_100, restored.snapshot().get(1_010).lastBuyPrice);
+        assertEquals(1_800, restored.snapshot().get(1_010).lastSellPrice);
     }
 }

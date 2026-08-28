@@ -543,6 +543,22 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 opportunity.itemName);
             card.add(coloredMetric("Lowest price", priceOrDash(lowestPrice), GOLD, selling));
         }
+        if (displayedBuyPrice > 0 && displayedSellPrice > 0)
+        {
+            long profitPerItem = SessionStatsTracker.calculateProfitPerItem(
+                displayedBuyPrice,
+                displayedSellPrice,
+                opportunity.itemName);
+            card.add(coloredMetric(
+                "Winst/item",
+                formatSignedGp(profitPerItem),
+                profitPerItem >= 0 ? GREEN : RED,
+                false));
+        }
+        else
+        {
+            card.add(compactMetric("Winst/item", "—"));
+        }
         return card;
     }
 
@@ -550,25 +566,14 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView lastTrade)
     {
-        return isActiveOffer(opportunity)
-            ? Math.max(0, opportunity.buyPrice)
-            : FlipPriceResolver.buyPrice(opportunity, lastTrade);
+        return FlipPriceResolver.displayedBuyPrice(opportunity, lastTrade);
     }
 
     static int displayedSellPrice(
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView lastTrade)
     {
-        return isActiveOffer(opportunity)
-            ? Math.max(0, opportunity.sellPrice)
-            : FlipPriceResolver.sellPrice(opportunity, lastTrade);
-    }
-
-    private static boolean isActiveOffer(RuneliteOverviewView.Opportunity opportunity)
-    {
-        return opportunity != null &&
-            ("active_buy".equals(opportunity.ranking) ||
-                "active_sell".equals(opportunity.ranking));
+        return FlipPriceResolver.displayedSellPrice(opportunity, lastTrade);
     }
 
     private static JButton primaryActionButton(String text)
@@ -621,12 +626,16 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         boolean buy = "buy".equals(fallback.side);
         int buyPrice = buy
             ? (fallback.suggestedBuyPrice > 0 ? fallback.suggestedBuyPrice : fallback.price)
-            : fallback.wikiInstantSellPrice;
+            : (fallback.suggestedBuyPrice > 0
+                ? fallback.suggestedBuyPrice
+                : fallback.wikiInstantSellPrice);
         int sellPrice = buy
             ? (fallback.suggestedSellPrice > 0
                 ? fallback.suggestedSellPrice
                 : fallback.wikiInstantBuyPrice)
-            : fallback.price;
+            : (fallback.suggestedSellPrice > 0
+                ? fallback.suggestedSellPrice
+                : fallback.price);
         return new RuneliteOverviewView.Opportunity(
             fallback.itemId,
             fallback.itemName,
@@ -1018,13 +1027,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
             JPanel state = new JPanel(new BorderLayout(4, 0));
             state.setOpaque(false);
-            state.setMaximumSize(new Dimension(Integer.MAX_VALUE, 23));
+            state.setMaximumSize(new Dimension(Integer.MAX_VALUE, 29));
             JLabel side = new JLabel("buy".equals(offer.side) ? "Koop" : "Verkoop");
             side.setForeground("buy".equals(offer.side) ? GREEN : GOLD);
             side.setFont(side.getFont().deriveFont(Font.BOLD));
             state.add(side, BorderLayout.WEST);
             elapsed.setForeground(MUTED);
-            elapsed.setFont(elapsed.getFont().deriveFont(10f));
+            elapsed.setFont(elapsed.getFont().deriveFont(Font.BOLD, 14f));
             state.add(elapsed, BorderLayout.EAST);
             panel.add(state);
             panel.add(compactMetric("Gevuld", formatNumber(offer.filledQuantity) + " / " + formatNumber(offer.totalQuantity)));

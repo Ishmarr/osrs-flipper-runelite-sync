@@ -71,6 +71,60 @@ public class ActiveOfferOpportunityTest
             OsrsFlipperSyncPanel.displayedSellPrice(focused, laterPriceTest));
     }
 
+    @Test
+    public void activeBuyShowsChangingWikiPricesWithoutMovingFrozenGuidance()
+    {
+        RuneliteOverviewView.Opportunity first =
+            OsrsFlipperSyncPanel.activeOfferOpportunity(
+                21163,
+                "buy",
+                java.util.Collections.singletonList(
+                    offer(1, "buy", 292_362, 302_073, 292_361)));
+        RuneliteOverviewView.Opportunity refreshed =
+            OsrsFlipperSyncPanel.activeOfferOpportunity(
+                21163,
+                "buy",
+                java.util.Collections.singletonList(
+                    offer(1, "buy", 292_362, 300_169, 296_549)));
+
+        assertEquals(292_362, first.buyPrice);
+        assertEquals(first.buyPrice, refreshed.buyPrice);
+        assertEquals(first.sellPrice, refreshed.sellPrice);
+        assertEquals(300_169, refreshed.instantBuy);
+        assertEquals(296_549, refreshed.instantSell);
+    }
+
+    @Test
+    public void activeSellKeepsTheCarriedBuyAndSellPlanWhileWikiMoves()
+    {
+        FlipperOfferView sell = new FlipperOfferView(
+            2,
+            21163,
+            "Emerald amulet",
+            "sell",
+            900,
+            50,
+            0,
+            "active",
+            10,
+            0,
+            700,
+            1_100,
+            1_300,
+            600);
+
+        RuneliteOverviewView.Opportunity active =
+            OsrsFlipperSyncPanel.activeOfferOpportunity(
+                21163,
+                "sell",
+                java.util.Collections.singletonList(sell));
+
+        assertEquals(700, active.buyPrice);
+        assertEquals(1_100, active.sellPrice);
+        assertEquals(1_300, active.instantBuy);
+        assertEquals(600, active.instantSell);
+    }
+
     private static FlipperOfferView offer(
         int slot,
         String side,

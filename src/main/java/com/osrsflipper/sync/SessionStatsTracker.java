@@ -188,6 +188,15 @@ final class SessionStatsTracker
         return Math.min((int) Math.floor(sellPrice * 0.02d), 5_000_000);
     }
 
+    static long calculateProfitPerItem(int buyPrice, int sellPrice, String itemName)
+    {
+        if (buyPrice <= 0 || sellPrice <= 0)
+        {
+            return 0L;
+        }
+        return (long) sellPrice - buyPrice - calculateTaxPerItem(sellPrice, itemName);
+    }
+
     static int calculateLowestBreakEvenSellPrice(int buyPrice, String itemName)
     {
         if (buyPrice <= 0)
