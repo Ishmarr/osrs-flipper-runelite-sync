@@ -75,6 +75,29 @@ public class SelectedGeOpportunityResolverTest
     }
 
     @Test
+    public void existingOfferKeepsFrozenLowestPriceWhileNewSetupHasNoStoredFloor()
+    {
+        FlipperOfferView active = new FlipperOfferView(
+            2, 101, "Dragon crossbow", "sell", 700_000,
+            100, 0, "active", 1, 0,
+            640_000, 700_000, 800_000, 600_000, 652_000);
+        SelectedGeOpportunityResolver.Resolution existing =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                101,
+                "sell",
+                scanner(),
+                new MarketPriceView(101, 900_000, 500_000, 20, 21, 22),
+                null,
+                active);
+        SelectedGeOpportunityResolver.Resolution setup = resolveNewSell(
+            new MarketPriceView(101, 900_000, 500_000, 20, 21, 22));
+
+        assertEquals(652_000, existing.opportunity.lowestSellPrice);
+        assertEquals(0, setup.opportunity.lowestSellPrice);
+    }
+
+    @Test
     public void liveMarketRefreshMovesCardAndChatTogether()
     {
         SelectedGeOpportunityResolver.Resolution first = resolveNewSell(

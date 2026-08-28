@@ -16,6 +16,7 @@ final class FlipperOfferView
     final int suggestedSellPrice;
     final int wikiInstantBuyPrice;
     final int wikiInstantSellPrice;
+    final int lowestSellPrice;
 
     FlipperOfferView(
         int slotNumber,
@@ -33,6 +34,28 @@ final class FlipperOfferView
         int wikiInstantBuyPrice,
         int wikiInstantSellPrice)
     {
+        this(slotNumber, itemId, itemName, side, price, totalQuantity,
+            filledQuantity, status, startedAt, endedAt, suggestedBuyPrice,
+            suggestedSellPrice, wikiInstantBuyPrice, wikiInstantSellPrice, 0);
+    }
+
+    FlipperOfferView(
+        int slotNumber,
+        int itemId,
+        String itemName,
+        String side,
+        int price,
+        int totalQuantity,
+        int filledQuantity,
+        String status,
+        long startedAt,
+        long endedAt,
+        int suggestedBuyPrice,
+        int suggestedSellPrice,
+        int wikiInstantBuyPrice,
+        int wikiInstantSellPrice,
+        int lowestSellPrice)
+    {
         this.slotNumber = slotNumber;
         this.itemId = itemId;
         this.itemName = itemName;
@@ -47,5 +70,6 @@ final class FlipperOfferView
         this.suggestedSellPrice = Math.max(0, suggestedSellPrice);
         this.wikiInstantBuyPrice = Math.max(0, wikiInstantBuyPrice);
         this.wikiInstantSellPrice = Math.max(0, wikiInstantSellPrice);
+        this.lowestSellPrice = Math.max(0, lowestSellPrice);
     }
 }
