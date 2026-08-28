@@ -27,6 +27,14 @@ public class FocusedGeItemResolverTest
     }
 
     @Test
+    public void priceEditorIgnoresAStaleSearchItem()
+    {
+        assertEquals(2434, FocusedGeItemResolver.priceEditorItemId(2434, 1127, 4151));
+        assertEquals(2434, FocusedGeItemResolver.priceEditorItemId(0, 2434, 4151));
+        assertEquals(2434, FocusedGeItemResolver.priceEditorItemId(0, 0, 2434));
+    }
+
+    @Test
     public void visibleDetailsItemActivatesFocusedMode()
     {
         assertEquals(4151, FocusedGeItemResolver.resolve(false, 0, 0, true, 4151, 0));

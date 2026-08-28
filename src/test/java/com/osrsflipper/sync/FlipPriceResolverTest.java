@@ -39,6 +39,33 @@ public class FlipPriceResolverTest
         assertEquals(1_849, FlipPriceResolver.sellPrice(1_850, 1_920, null));
     }
 
+    @Test
+    public void editorUsesTheFreshMarketPriceForANewOffer()
+    {
+        RuneliteOverviewView.Opportunity overview = opportunity();
+        MarketPriceView newerButDifferentMarket = new MarketPriceView(
+            101, 2_500, 2_400, 30, 31, 32);
+        LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
+
+        assertEquals(2_401,
+            FlipPriceResolver.editorPrice("buy", overview, newerButDifferentMarket, priceTest));
+        assertEquals(2_499,
+            FlipPriceResolver.editorPrice("sell", overview, newerButDifferentMarket, priceTest));
+    }
+
+    @Test
+    public void editorKeepsTheFrozenPlanForAnActiveOffer()
+    {
+        RuneliteOverviewView.Opportunity active = new RuneliteOverviewView.Opportunity(
+            101, "Test item", "active_buy",
+            1_700, 1_900, 2_500, 2_400,
+            10, 1_000, 10, 500, 1_000, 123);
+        MarketPriceView market = new MarketPriceView(101, 2_600, 2_300, 30, 31, 32);
+
+        assertEquals(1_700, FlipPriceResolver.editorPrice("buy", active, market, null));
+        assertEquals(1_900, FlipPriceResolver.editorPrice("sell", active, market, null));
+    }
+
     private static RuneliteOverviewView.Opportunity opportunity()
     {
         return new RuneliteOverviewView.Opportunity(

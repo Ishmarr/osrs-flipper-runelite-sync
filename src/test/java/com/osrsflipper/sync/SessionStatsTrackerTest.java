@@ -65,6 +65,19 @@ public class SessionStatsTrackerTest
     }
 
     @Test
+    public void profitPerItemUsesTheDisplayedPricesAndGeTax()
+    {
+        assertEquals(176L,
+            SessionStatsTracker.calculateProfitPerItem(1_000, 1_200, "Regular item"));
+        assertEquals(-20L,
+            SessionStatsTracker.calculateProfitPerItem(1_000, 1_000, "Regular item"));
+        assertEquals(200L,
+            SessionStatsTracker.calculateProfitPerItem(1_000, 1_200, "Old school bond"));
+        assertEquals(0L,
+            SessionStatsTracker.calculateProfitPerItem(0, 1_200, "Regular item"));
+    }
+
+    @Test
     public void lowestSellPriceBreaksEvenAfterGeTax()
     {
         assertEquals(49, SessionStatsTracker.calculateLowestBreakEvenSellPrice(49, "Cheap item"));

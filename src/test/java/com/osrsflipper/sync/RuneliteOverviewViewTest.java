@@ -112,6 +112,19 @@ public class RuneliteOverviewViewTest
         assertThrows(UnsupportedOperationException.class, () -> view.priceTests.clear());
     }
 
+    @Test
+    public void carriesAccountwidePriceTestTombstones()
+    {
+        LastTradePriceView reset = new LastTradePriceView(573, 0, 0, 0, 0, 123);
+        RuneliteOverviewView view = new RuneliteOverviewView(
+            Collections.emptyList(), Collections.emptyList(), null,
+            null, null, null,
+            Collections.singletonList(reset), RuneliteOverviewView.CashBalance.empty(), 124);
+
+        assertEquals(123, view.priceTests.get(0).clearedAt);
+        assertEquals(0, view.priceTests.get(0).lastBuyPrice);
+    }
+
     private static RuneliteOverviewView.Opportunity opportunity(int itemId, int buyPrice, int sellPrice)
     {
         return new RuneliteOverviewView.Opportunity(
