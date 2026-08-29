@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.18
+# OSRS Flipper Sync v5.2.19
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.19
+
+- Herstelt de prijsrichting op alle gewone top-flipkaarten: instant sell ankert de kooporder en instant buy ankert de verkooporder.
+- Berekent de getoonde totale flipwinst opnieuw uit dezelfde koopprijs, verkoopprijs, tax en hoeveelheid als `Winst/item`.
+- Bestaande actieve offers en geselecteerde nieuwe setups behouden hun afzonderlijk vastgelegde planprijzen.
 
 ## 5.2.18
 
@@ -199,7 +205,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - Een normaal afgerond, geleegd of nieuw offer erft nooit de vloerprijs van een vorige cyclus.
 - Een snelle automatische 1x1-test bewaart de werkelijk gevulde koop- en verkoopprijs ook wanneer de test gelijk of toevallig winstgevend eindigt.
 - Snelle 1x1-fills in verschillende GE-slots gebruiken dezelfde fysieke waarnemingsklok; een volledig gevulde `CANCELLED`-race en een veilig gemiste runtime-fill worden eveneens herkend.
-- In het zijpaneel gebruikt `Koop` rechtstreeks `Last buy price` en `Verkoop` rechtstreeks `Last sell price`; ontbrekende persoonlijke prijzen vallen per zijde terug op de normale scanner-/Wiki-regel.
+- Deze release liet het zijpaneel persoonlijke fillprijzen tijdelijk aan de verkeerde voorstelzijde tonen; v5.2.19 herstelt de koppeling naar `Last sell price` voor Koop en `Last buy price` voor Verkoop.
 
 ## Configuratie
 

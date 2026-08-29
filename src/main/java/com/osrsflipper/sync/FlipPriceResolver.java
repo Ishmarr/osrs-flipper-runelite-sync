@@ -58,34 +58,18 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        if (SelectedGeOpportunityResolver.isSelectedSetup(opportunity))
-        {
-            return Math.max(0, opportunity.buyPrice);
-        }
-        if (priceTest != null && priceTest.lastBuyPrice > 0)
-        {
-            return priceTest.lastBuyPrice;
-        }
         return isFixedSelection(opportunity)
             ? Math.max(0, opportunity.buyPrice)
-            : buyPrice(opportunity, null);
+            : buyPrice(opportunity, priceTest);
     }
 
     static int displayedSellPrice(
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
-        if (SelectedGeOpportunityResolver.isSelectedSetup(opportunity))
-        {
-            return Math.max(0, opportunity.sellPrice);
-        }
-        if (priceTest != null && priceTest.lastSellPrice > 0)
-        {
-            return priceTest.lastSellPrice;
-        }
         return isFixedSelection(opportunity)
             ? Math.max(0, opportunity.sellPrice)
-            : sellPrice(opportunity, null);
+            : sellPrice(opportunity, priceTest);
     }
 
     static int editorPrice(
