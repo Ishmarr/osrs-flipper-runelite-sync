@@ -260,7 +260,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         JLabel text = wrapLabel("<b>Beste flips</b><br><small>Zelfde model als de webscanner</small>", 150);
         heading.add(text, BorderLayout.CENTER);
         JButton refresh = new JButton("↻");
-        refresh.setToolTipText("Flips en statistieken vernieuwen");
+        refresh.setToolTipText("Flips met verse Wiki-prijzen vernieuwen");
         refresh.setPreferredSize(new Dimension(34, 28));
         refresh.addActionListener(event -> refreshAction.run());
         heading.add(refresh, BorderLayout.EAST);

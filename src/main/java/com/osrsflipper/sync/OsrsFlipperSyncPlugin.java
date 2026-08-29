@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.15";
+    private static final String PLUGIN_VERSION = "5.2.16";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -107,7 +107,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final int SERVER_STATE_GAME_TICKS = 200;
     private static final int FULL_SNAPSHOT_GAME_TICKS = 500;
     private static final int MARKET_PRICE_GAME_TICKS = 100;
-    private static final int OVERVIEW_GAME_TICKS = 500;
+    // Een game tick duurt ongeveer 600 ms. De kanslijst wordt dus ongeveer
+    // iedere minuut opnieuw opgehaald, terwijl de Worker zijn lichte cache kan
+    // blijven gebruiken om onnodige D1-reads te vermijden.
+    static final int OVERVIEW_GAME_TICKS = 100;
     private static final int MAX_OUTBOX_SIZE = 500;
     private static final long MARKET_PRICE_CACHE_SECONDS = 60L;
     private static final long RETRY_BASE_SECONDS = 5L;
@@ -185,6 +188,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean overviewInFlight;
     private boolean cashInFlight;
     private boolean overviewRefreshPending;
+    private boolean overviewFreshMarketPending;
     private int overviewTicks;
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
@@ -231,6 +235,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewInFlight = false;
         cashInFlight = false;
         overviewRefreshPending = false;
+        overviewFreshMarketPending = false;
         overviewTicks = OVERVIEW_GAME_TICKS;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
@@ -305,6 +310,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         marketPriceInFlight = false;
         overviewInFlight = false;
         overviewRefreshPending = false;
+        overviewFreshMarketPending = false;
         overviewTicks = 0;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
@@ -526,7 +532,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             this::beginInteractivePairing,
             this::requestManualResync,
             this::openWebapp,
-            () -> clientThread.invokeLater(() -> requestOverview(true)),
+            () -> clientThread.invokeLater(this::requestFreshMarketOverview),
             value -> clientThread.invokeLater(() -> setAccountCash(value)));
         panel.setConnectionStatus(config.connectionStatus());
         // startUp() runs on Swing's AWT thread. RuneLite item definitions may only
@@ -1991,6 +1997,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         queuedMarketPriceItems.clear();
         overview = RuneliteOverviewView.empty();
         overviewInFlight = false;
+        overviewRefreshPending = false;
+        overviewFreshMarketPending = false;
         overviewTicks = OVERVIEW_GAME_TICKS;
         loadCurrentAccount();
         requestInFlight = false;
@@ -2204,6 +2212,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void requestOverview(boolean force)
     {
+        requestOverview(force, false);
+    }
+
+    private void requestFreshMarketOverview()
+    {
+        requestOverview(true, true);
+    }
+
+    private void requestOverview(boolean force, boolean freshMarket)
+    {
         if (!started || !hasDeviceToken())
         {
             return;
@@ -2213,6 +2231,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (force)
             {
                 overviewRefreshPending = true;
+            }
+            if (freshMarket)
+            {
+                overviewFreshMarketPending = true;
             }
             return;
         }
@@ -2227,14 +2249,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         LocalDate today = LocalDate.now(zone);
         long dayStart = today.atStartOfDay(zone).toEpochSecond();
         long monthStart = today.withDayOfMonth(1).atStartOfDay(zone).toEpochSecond();
-        HttpUrl.Builder url = base.newBuilder()
-            .addQueryParameter("day_start", Long.toString(dayStart))
-            .addQueryParameter("month_start", Long.toString(monthStart));
-        if (focusedGeItemId > 0)
-        {
-            url.addQueryParameter("focus_item_id", Integer.toString(focusedGeItemId));
-        }
-        Request request = authorizedRequest(url.build()).get().build();
+        HttpUrl url = overviewUrl(
+            base,
+            dayStart,
+            monthStart,
+            focusedGeItemId,
+            freshMarket);
+        Request request = authorizedRequest(url).get().build();
         overviewInFlight = true;
         overviewTicks = 0;
         httpClient.newCall(request).enqueue(new Callback()
@@ -2266,6 +2287,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             overviewInFlight = false;
             overviewRefreshPending = false;
+            overviewFreshMarketPending = false;
             clearStoredPairing("Koppeling ongeldig of ingetrokken; maak een nieuwe code");
             return;
         }
@@ -2310,9 +2332,35 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewInFlight = false;
         if (overviewRefreshPending)
         {
+            boolean freshMarket = overviewFreshMarketPending;
             overviewRefreshPending = false;
-            requestOverview(true);
+            overviewFreshMarketPending = false;
+            requestOverview(true, freshMarket);
         }
+    }
+
+    static HttpUrl overviewUrl(
+        HttpUrl base,
+        long dayStart,
+        long monthStart,
+        int focusItemId,
+        boolean freshMarket)
+    {
+        HttpUrl.Builder url = base.newBuilder()
+            .addQueryParameter("day_start", Long.toString(dayStart))
+            .addQueryParameter("month_start", Long.toString(monthStart));
+        if (focusItemId > 0)
+        {
+            url.addQueryParameter("focus_item_id", Integer.toString(focusItemId));
+        }
+        if (freshMarket)
+        {
+            // Contract met de Worker: alleen een expliciete gebruikersactie
+            // mag de marktcache omzeilen. Periodieke requests sturen deze
+            // parameter bewust niet mee.
+            url.addQueryParameter("fresh_market", "1");
+        }
+        return url.build();
     }
 
     private void setAccountCash(long value)
@@ -3361,6 +3409,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         boolean success;
         long generated_at;
+        long market_generated_at;
         OpportunityLists opportunities;
         OverviewStats stats;
         List<PriceTestData> price_tests;
@@ -3385,7 +3434,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 cash == null
                     ? RuneliteOverviewView.CashBalance.empty()
                     : cash.toView(),
-                generated_at);
+                market_generated_at > 0 ? market_generated_at : generated_at);
         }
 
         private static List<LastTradePriceView> priceTestViews(List<PriceTestData> rows)
