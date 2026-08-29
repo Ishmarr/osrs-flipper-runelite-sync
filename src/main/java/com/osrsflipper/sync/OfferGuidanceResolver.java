@@ -58,6 +58,36 @@ final class OfferGuidanceResolver
             !"cancelled".equals(previousStatus);
     }
 
+    /**
+     * RuneLite reports Modify offer as a cancelled offer followed directly by a
+     * replacement in the same GE slot. No EMPTY state occurs in between. Keep
+     * the original guidance for that direct successor, including the buy-time
+     * break-even floor. A normal cancellation must first become EMPTY before a
+     * new offer can be placed and therefore does not match this predicate.
+     */
+    static boolean continuesCancelledReprice(
+        boolean sameItemAndSide,
+        String previousStatus,
+        int previousPrice,
+        int nextPrice,
+        int previousTotalQuantity,
+        int previousFilledQuantity,
+        int nextTotalQuantity)
+    {
+        if (!sameItemAndSide || !"cancelled".equals(previousStatus) ||
+            previousPrice <= 0 || nextPrice <= 0 || previousPrice == nextPrice ||
+            previousTotalQuantity <= 0 || nextTotalQuantity <= 0)
+        {
+            return false;
+        }
+
+        int remainingQuantity = Math.max(
+            0,
+            previousTotalQuantity - Math.max(0, previousFilledQuantity));
+        return nextTotalQuantity == previousTotalQuantity ||
+            (remainingQuantity > 0 && nextTotalQuantity == remainingQuantity);
+    }
+
     static BuyCandidate frozenBuyCandidate(
         int slotNumber,
         int itemId,

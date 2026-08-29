@@ -108,6 +108,79 @@ public class OfferGuidanceResolverTest
     }
 
     @Test
+    public void directModifySuccessorPreservesTheOriginalLowestPrice()
+    {
+        assertTrue(OfferGuidanceResolver.continuesCancelledReprice(
+            true,
+            "cancelled",
+            9_681,
+            9_600,
+            2_846,
+            0,
+            2_846));
+        assertTrue(OfferGuidanceResolver.continuesCancelledReprice(
+            true,
+            "cancelled",
+            9_681,
+            9_488,
+            2_846,
+            1_634,
+            1_212));
+
+        OfferGuidanceResolver.Guidance modified = OfferGuidanceResolver.reprice(
+            "sell",
+            9_488,
+            9_500,
+            new OfferGuidanceResolver.Guidance(
+                9_398,
+                9_681,
+                "buy-antidote",
+                9_589));
+
+        assertEquals(9_398, modified.buyPrice);
+        assertEquals(9_589, modified.lowestSellPrice);
+        assertEquals("buy-antidote", modified.sourceBuyOfferId);
+    }
+
+    @Test
+    public void repeatedModifyOperationsKeepTheFirstFrozenLowestPrice()
+    {
+        OfferGuidanceResolver.Guidance original = new OfferGuidanceResolver.Guidance(
+            9_398,
+            9_681,
+            "buy-antidote",
+            9_589);
+        OfferGuidanceResolver.Guidance firstModify = OfferGuidanceResolver.reprice(
+            "sell",
+            9_488,
+            9_500,
+            original);
+        OfferGuidanceResolver.Guidance secondModify = OfferGuidanceResolver.reprice(
+            "sell",
+            9_750,
+            9_800,
+            firstModify);
+
+        assertEquals(9_398, secondModify.buyPrice);
+        assertEquals(9_800, secondModify.sellPrice);
+        assertEquals(9_589, secondModify.lowestSellPrice);
+        assertEquals("buy-antidote", secondModify.sourceBuyOfferId);
+    }
+
+    @Test
+    public void completedEmptyOrUnrelatedOfferCannotInheritThePreviousFloor()
+    {
+        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+            true, "completed", 9_681, 9_488, 2_846, 1_634, 1_212));
+        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+            false, "cancelled", 9_681, 9_488, 2_846, 1_634, 1_212));
+        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+            true, "cancelled", 9_681, 9_681, 2_846, 1_634, 1_212));
+        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+            true, "cancelled", 9_681, 9_488, 2_846, 1_634, 1_211));
+    }
+
+    @Test
     public void aTrulyNewBuyGetsItsOwnFloorInsteadOfTheTerminalPredecessorFloor()
     {
         OfferGuidanceResolver.Guidance next = OfferGuidanceResolver.buy(

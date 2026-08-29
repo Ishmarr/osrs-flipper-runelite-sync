@@ -27,6 +27,29 @@ public class LastTradePriceBookTest
     }
 
     @Test
+    public void crossSlotEventsObservedInTheSameSecondStillFormOnePriceTest()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.recordTransition(111, "buy", 0, 0, 1, 9_141, 1, "completed", 9_143, 100);
+        book.recordTransition(111, "sell", 0, 0, 1, 8_000, 1, "completed", 8_000, 100);
+
+        LastTradePriceView prices = book.snapshot().get(111);
+        assertEquals(9_141, prices.lastBuyPrice);
+        assertEquals(8_000, prices.lastSellPrice);
+    }
+
+    @Test
+    public void aFullCancelledFillStillPublishesTheOneByOneCycle()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.recordTransition(112, "buy", 0, 0, 1, 9_141, 1, "completed", 9_143, 100);
+        book.recordTransition(112, "sell", 0, 0, 1, 8_000, 1, "completed", 8_000, 101);
+
+        assertEquals(9_141, book.snapshot().get(112).lastBuyPrice);
+        assertEquals(8_000, book.snapshot().get(112).lastSellPrice);
+    }
+
+    @Test
     public void ordinaryAndPartialFillsNeverChangePublishedPrices()
     {
         LastTradePriceBook book = new LastTradePriceBook();
@@ -40,18 +63,30 @@ public class LastTradePriceBookTest
     }
 
     @Test
-    public void slowOrProfitableOneByOneCyclesAreNotPriceTests()
+    public void flatAndProfitableOneByOneCyclesPublishTheirExactFillPrices()
     {
         LastTradePriceBook book = new LastTradePriceBook();
         book.recordTransition(202, "buy", 0, 0, 1, 1_000, 1, "completed", 1_000, 20);
         book.recordTransition(202, "sell", 0, 0, 1, 1_100, 1, "completed", 1_100, 21);
-        assertEquals(0, book.snapshot().get(202).lastBuyPrice);
+        assertEquals(1_000, book.snapshot().get(202).lastBuyPrice);
+        assertEquals(1_100, book.snapshot().get(202).lastSellPrice);
 
-        book.recordTransition(202, "buy", 0, 0, 1, 1_000, 1, "completed", 1_000, 30);
-        book.recordTransition(202, "sell", 0, 0, 1, 900, 1, "completed", 900, 61);
+        book.recordTransition(303, "buy", 0, 0, 1, 1_000, 1, "completed", 1_000, 30);
+        book.recordTransition(303, "sell", 0, 0, 1, 1_000, 1, "completed", 1_000, 31);
 
-        assertEquals(0, book.snapshot().get(202).lastBuyPrice);
-        assertEquals(0, book.snapshot().get(202).lastSellPrice);
+        assertEquals(1_000, book.snapshot().get(303).lastBuyPrice);
+        assertEquals(1_000, book.snapshot().get(303).lastSellPrice);
+    }
+
+    @Test
+    public void aOneByOneCycleOutsideTheAutomaticWindowIsNotAPriceTest()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.recordTransition(404, "buy", 0, 0, 1, 1_000, 1, "completed", 1_000, 30);
+        book.recordTransition(404, "sell", 0, 0, 1, 900, 1, "completed", 900, 61);
+
+        assertEquals(0, book.snapshot().get(404).lastBuyPrice);
+        assertEquals(0, book.snapshot().get(404).lastSellPrice);
     }
 
     @Test
@@ -188,6 +223,22 @@ public class LastTradePriceBookTest
 
         assertEquals(2_100, restored.snapshot().get(1_010).lastBuyPrice);
         assertEquals(1_800, restored.snapshot().get(1_010).lastSellPrice);
+    }
+
+    @Test
+    public void localPriceTestWinsATimestampTieWithAnAuthoritativeTombstone()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_011, 0, 0, 0, 0, 300)));
+
+        book.recordTransition(1_011, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_011, 0, 0, 0, 0, 300)));
+        book.recordTransition(1_011, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertEquals(2_100, book.snapshot().get(1_011).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_011).lastSellPrice);
     }
 
     @Test

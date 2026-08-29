@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.16";
+    private static final String PLUGIN_VERSION = "5.2.17";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -1030,7 +1030,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             sameOffer = false;
         }
-        long eventAt = nextLogicalTime(previous == null ? 0 : previous.lastEventAt);
+        long observedAt = now();
+        long eventAt = Math.max(observedAt, (previous == null ? 0 : previous.lastEventAt) + 1);
         SlotSnapshot next;
         String eventType;
 
@@ -1059,7 +1060,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 int currentSellCandidate = suggestedSellPriceFor(itemId);
                 boolean continuingBuyOffer = OfferGuidanceResolver.continuesOfferLifecycle(
                     sameOfferShape(previous, itemId, side, totalQuantity),
-                    previous == null ? "" : previous.status);
+                    previous == null ? "" : previous.status) ||
+                    continuesCancelledReprice(
+                        previous,
+                        itemId,
+                        side,
+                        price,
+                        totalQuantity);
                 OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.buy(
                     price,
                     currentSellCandidate,
@@ -1089,7 +1096,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 int currentSellCandidate = suggestedSellPriceFor(itemId);
                 boolean continuingSellOffer = OfferGuidanceResolver.continuesOfferLifecycle(
                     sameOfferShape(previous, itemId, side, totalQuantity),
-                    previous == null ? "" : previous.status);
+                    previous == null ? "" : previous.status) ||
+                    continuesCancelledReprice(
+                        previous,
+                        itemId,
+                        side,
+                        price,
+                        totalQuantity);
                 if (continuingSellOffer)
                 {
                     OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.reprice(
@@ -1179,7 +1192,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             next.spentAmount,
             next.status,
             next.price);
-        if (!reconciliation)
+        if (shouldRecordPriceTransition(
+            reconciliation,
+            sameOffer,
+            previousFilled,
+            next.filledQuantity))
         {
             lastTradePrices.recordTransition(
                 next.itemId,
@@ -1191,7 +1208,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 next.totalQuantity,
                 next.status,
                 next.price,
-                next.lastEventAt);
+                observedAt);
         }
 
         slotSnapshots.put(slotNumber, next);
@@ -3126,6 +3143,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
             previous.totalQuantity == totalQuantity;
     }
 
+    private static boolean continuesCancelledReprice(
+        SlotSnapshot previous,
+        int itemId,
+        String side,
+        int price,
+        int totalQuantity)
+    {
+        boolean sameItemAndSide = previous != null &&
+            !"empty".equals(previous.status) &&
+            !isBlank(previous.offerId) &&
+            previous.itemId == itemId &&
+            Objects.equals(previous.side, side);
+        return OfferGuidanceResolver.continuesCancelledReprice(
+            sameItemAndSide,
+            previous == null ? "" : previous.status,
+            previous == null ? 0 : previous.price,
+            price,
+            previous == null ? 0 : previous.totalQuantity,
+            previous == null ? 0 : previous.filledQuantity,
+            totalQuantity);
+    }
+
     private static OfferGuidanceResolver.Guidance guidance(SlotSnapshot snapshot)
     {
         if (snapshot == null)
@@ -3203,7 +3242,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     static String statusFor(GrandExchangeOfferState state, int filledQuantity, int totalQuantity)
     {
         if (totalQuantity > 0 && filledQuantity >= totalQuantity &&
-            (state == GrandExchangeOfferState.BUYING || state == GrandExchangeOfferState.SELLING))
+            state != GrandExchangeOfferState.EMPTY)
         {
             return "completed";
         }
@@ -3223,6 +3262,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
             default:
                 return null;
         }
+    }
+
+    static boolean shouldRecordPriceTransition(
+        boolean reconciliation,
+        boolean sameOffer,
+        int previousFilled,
+        int nextFilled)
+    {
+        return !reconciliation ||
+            (sameOffer && nextFilled > Math.max(0, previousFilled));
     }
 
     private static String eventTypeFor(

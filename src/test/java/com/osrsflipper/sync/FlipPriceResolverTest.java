@@ -66,6 +66,36 @@ public class FlipPriceResolverTest
         assertEquals(1_900, FlipPriceResolver.editorPrice("sell", active, market, null));
     }
 
+    @Test
+    public void panelMapsPersonalFillPricesToTheMatchingBuyAndSellRows()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(
+            101, 9_141, 8_000, 20, 21);
+
+        assertEquals(9_141,
+            FlipPriceResolver.displayedBuyPrice(opportunity(), priceTest));
+        assertEquals(8_000,
+            FlipPriceResolver.displayedSellPrice(opportunity(), priceTest));
+    }
+
+    @Test
+    public void panelFallsBackPerSideWhenTheMatchingPersonalPriceIsMissing()
+    {
+        LastTradePriceView onlySell = new LastTradePriceView(
+            101, 0, 8_000, 0, 21);
+        LastTradePriceView onlyBuy = new LastTradePriceView(
+            101, 9_141, 0, 20, 0);
+
+        assertEquals(1_754,
+            FlipPriceResolver.displayedBuyPrice(opportunity(), onlySell));
+        assertEquals(8_000,
+            FlipPriceResolver.displayedSellPrice(opportunity(), onlySell));
+        assertEquals(9_141,
+            FlipPriceResolver.displayedBuyPrice(opportunity(), onlyBuy));
+        assertEquals(1_828,
+            FlipPriceResolver.displayedSellPrice(opportunity(), onlyBuy));
+    }
+
     private static RuneliteOverviewView.Opportunity opportunity()
     {
         return new RuneliteOverviewView.Opportunity(
