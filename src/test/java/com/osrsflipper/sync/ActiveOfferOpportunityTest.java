@@ -32,7 +32,7 @@ public class ActiveOfferOpportunityTest
     }
 
     @Test
-    public void activeBuyKeepsItsFrozenAdviceAheadOfTheLiveOverview()
+    public void activeBuyKeepsFrozenGuidanceButPanelPrioritizesPersonalFillPrices()
     {
         FlipperOfferView buy = offer(1, "buy", 292_362, 302_073, 292_361);
         RuneliteOverviewView.Opportunity live = new RuneliteOverviewView.Opportunity(
@@ -65,9 +65,9 @@ public class ActiveOfferOpportunityTest
             305_000,
             3,
             3);
-        assertEquals(292_362,
+        assertEquals(310_000,
             OsrsFlipperSyncPanel.displayedBuyPrice(focused, laterPriceTest));
-        assertEquals(700,
+        assertEquals(305_000,
             OsrsFlipperSyncPanel.displayedSellPrice(focused, laterPriceTest));
     }
 

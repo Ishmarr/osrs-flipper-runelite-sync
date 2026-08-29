@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.16
+# OSRS Flipper Sync v5.2.17
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -185,6 +185,16 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De vernieuwknop vraagt expliciet de nieuwste Wiki-marktdata op; gewone periodieke refreshes blijven de lichte Worker-cache gebruiken.
 - Een klik tijdens een lopende refresh blijft bewaard en wordt direct daarna als verse marktrefresh uitgevoerd.
 - De langere caches voor persoonlijke statistieken, cash, prijstests en buy limits blijven behouden, zodat de snellere marktrefresh geen brede D1-reads veroorzaakt.
+
+## Oplossing in v5.2.17
+
+- `Modify offer` houdt de oorspronkelijke, bij aankoop bevroren `Lowest price` vast.
+- Ook wanneer een gedeeltelijk gevuld offer alleen met de resterende hoeveelheid opnieuw wordt geplaatst, blijft dezelfde vloerprijs en koopkoppeling behouden.
+- Meerdere opeenvolgende prijswijzigingen houden exact dezelfde oorspronkelijke vloerprijs vast.
+- Een normaal afgerond, geleegd of nieuw offer erft nooit de vloerprijs van een vorige cyclus.
+- Een snelle automatische 1x1-test bewaart de werkelijk gevulde koop- en verkoopprijs ook wanneer de test gelijk of toevallig winstgevend eindigt.
+- Snelle 1x1-fills in verschillende GE-slots gebruiken dezelfde fysieke waarnemingsklok; een volledig gevulde `CANCELLED`-race en een veilig gemiste runtime-fill worden eveneens herkend.
+- In het zijpaneel gebruikt `Koop` rechtstreeks `Last buy price` en `Verkoop` rechtstreeks `Last sell price`; ontbrekende persoonlijke prijzen vallen per zijde terug op de normale scanner-/Wiki-regel.
 
 ## Configuratie
 

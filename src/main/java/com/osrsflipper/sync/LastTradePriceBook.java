@@ -64,7 +64,7 @@ final class LastTradePriceBook
         entry.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
         if ("buy".equals(side))
         {
-            if (eventAt <= entry.clearedAt)
+            if (eventAt < entry.clearedAt)
             {
                 return;
             }
@@ -75,8 +75,7 @@ final class LastTradePriceBook
         {
             long sellAt = Math.max(0, eventAt);
             long elapsed = sellAt - entry.pendingTestBuyAt;
-            if (entry.pendingTestBuyPrice > unitPrice &&
-                entry.pendingTestBuyAt > 0 &&
+            if (entry.pendingTestBuyAt > 0 &&
                 elapsed >= 0 && elapsed <= MAX_PRICE_TEST_SECONDS)
             {
                 entry.lastBuyPrice = entry.pendingTestBuyPrice;
@@ -208,7 +207,7 @@ final class LastTradePriceBook
                 {
                     clearPublished(merged);
                 }
-                if (merged.pendingTestBuyAt <= server.clearedAt)
+                if (merged.pendingTestBuyAt < server.clearedAt)
                 {
                     clearPending(merged);
                 }
@@ -219,7 +218,7 @@ final class LastTradePriceBook
             long localAt = local == null ? 0 : Math.max(
                 Math.max(latestPriceTestAt(local), local.pendingTestBuyAt),
                 local.clearedAt);
-            if (local != null && localAt > serverAt)
+            if (local != null && localAt > 0 && localAt >= serverAt)
             {
                 continue;
             }
