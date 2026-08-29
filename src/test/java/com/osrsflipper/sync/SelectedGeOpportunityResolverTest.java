@@ -159,6 +159,106 @@ public class SelectedGeOpportunityResolverTest
     }
 
     @Test
+    public void sellSetupAfterCollectKeepsTheBuyCycleFrozenWhileWikiMoves()
+    {
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                3004,
+                "Snapdragon potion (unf)",
+                "sell",
+                new RuneliteOverviewView.Opportunity(
+                    3004, "Snapdragon potion (unf)", "cycle_profit",
+                    7_841, 7_888, 7_860, 7_840,
+                    5_803, 0, 5_803, 0, 0, 30),
+                new MarketPriceView(3004, 7_860, 7_840, 30, 30, 30),
+                new LastTradePriceView(3004, 7_889, 7_630, 20, 21),
+                null,
+                openSnapdragonCycle());
+
+        assertEquals("open_flip_cycle", resolved.opportunity.ranking);
+        assertEquals(7_631, resolved.opportunity.buyPrice);
+        assertEquals(7_888, resolved.opportunity.sellPrice);
+        assertEquals(7_786, resolved.opportunity.lowestSellPrice);
+        assertEquals(5_803, resolved.opportunity.maximumQuantity);
+        assertEquals(7_860, resolved.opportunity.instantBuy);
+        assertEquals(7_840, resolved.opportunity.instantSell);
+        assertEquals(7_631,
+            OsrsFlipperSyncPanel.displayedBuyPrice(resolved.opportunity,
+                new LastTradePriceView(3004, 8_100, 8_000, 40, 41)));
+    }
+
+    @Test
+    public void aNewBuySetupDoesNotInheritAnOlderOpenSellCycle()
+    {
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                3004,
+                "Snapdragon potion (unf)",
+                "buy",
+                null,
+                new MarketPriceView(3004, 7_860, 7_840, 30, 30, 30),
+                new LastTradePriceView(3004, 7_889, 7_700, 20, 21),
+                null,
+                openSnapdragonCycle());
+
+        assertEquals("selected_setup", resolved.opportunity.ranking);
+        assertEquals(7_701, resolved.opportunity.buyPrice);
+        assertEquals(0, resolved.opportunity.lowestSellPrice);
+    }
+
+    @Test
+    public void aNewBuyDoesNotInheritAnotherOpenBuyForTheSameItem()
+    {
+        FlipperOfferView openBuy = new FlipperOfferView(
+            1, 29455, "Moonlight antler bolts", "buy", 229,
+            10_999, 0, "cycle_open_buy", 100, 0,
+            229, 244, 245, 245, 234);
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                29455,
+                "Moonlight antler bolts",
+                "buy",
+                null,
+                new MarketPriceView(29455, 260, 250, 30, 30, 30),
+                new LastTradePriceView(29455, 245, 240, 20, 21),
+                null,
+                openBuy);
+
+        assertEquals("selected_setup", resolved.opportunity.ranking);
+        assertEquals(241, resolved.opportunity.buyPrice);
+        assertEquals(244, resolved.opportunity.sellPrice);
+        assertEquals(0, resolved.opportunity.lowestSellPrice);
+    }
+
+    @Test
+    public void anExactSellOfferTakesPriorityOverTheOpenCycleFallback()
+    {
+        FlipperOfferView exact = new FlipperOfferView(
+            2, 3004, "Snapdragon potion (unf)", "sell", 7_900,
+            5_803, 0, "active", 200, 0,
+            7_631, 7_900, 7_860, 7_840, 7_786);
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
+                3004,
+                "Snapdragon potion (unf)",
+                "sell",
+                null,
+                new MarketPriceView(3004, 8_000, 7_700, 30, 30, 30),
+                null,
+                exact,
+                openSnapdragonCycle());
+
+        assertEquals("active_sell", resolved.opportunity.ranking);
+        assertEquals(7_631, resolved.opportunity.buyPrice);
+        assertEquals(7_900, resolved.opportunity.sellPrice);
+        assertEquals(7_786, resolved.opportunity.lowestSellPrice);
+    }
+
+    @Test
     public void liveMarketRefreshMovesCardAndChatTogether()
     {
         SelectedGeOpportunityResolver.Resolution first = resolveNewSell(
@@ -278,5 +378,25 @@ public class SelectedGeOpportunityResolverTest
             instantBuy,
             instantSell,
             lowestSellPrice);
+    }
+
+    private static FlipperOfferView openSnapdragonCycle()
+    {
+        return new FlipperOfferView(
+            1,
+            3004,
+            "Snapdragon potion (unf)",
+            "sell",
+            7_888,
+            5_803,
+            0,
+            "cycle_pending_sell",
+            100,
+            0,
+            7_631,
+            7_888,
+            7_860,
+            7_840,
+            7_786);
     }
 }

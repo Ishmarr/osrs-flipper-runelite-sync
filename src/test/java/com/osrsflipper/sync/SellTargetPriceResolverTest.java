@@ -55,11 +55,11 @@ public class SellTargetPriceResolverTest
     }
 
     @Test
-    public void keepsTheStrongestSellReferenceAndOnlyRaisesACapturedTarget()
+    public void personalSellReferenceWinsAndACapturedTargetOnlyRaises()
     {
         MarketPriceView market = new MarketPriceView(101, 1_900, 1_700, 10, 9, 11);
         LastTradePriceView lowerPriceTest = new LastTradePriceView(101, 1_850, 1_700, 20, 21);
-        assertEquals(1_899, SellTargetPriceResolver.provisional(
+        assertEquals(1_849, SellTargetPriceResolver.provisional(
             market,
             opportunity(1_920, 1_800),
             lowerPriceTest));

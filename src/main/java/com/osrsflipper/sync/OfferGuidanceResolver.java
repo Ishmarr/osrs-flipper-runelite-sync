@@ -17,11 +17,15 @@ final class OfferGuidanceResolver
         Guidance previous,
         boolean continuingOffer)
     {
+        Guidance safePrevious = previous == null ? Guidance.empty() : previous;
+        int frozenBuyPrice = continuingOffer && safePrevious.buyPrice > 0
+            ? safePrevious.buyPrice
+            : Math.max(0, actualOrderPrice);
         Guidance repriced = reprice(
             "buy",
-            actualOrderPrice,
+            frozenBuyPrice,
             currentSellCandidate,
-            continuingOffer ? previous : Guidance.empty());
+            continuingOffer ? safePrevious : Guidance.empty());
         int lowestSellPrice = freezeLowestSellPrice(
             repriced.lowestSellPrice,
             repriced.buyPrice,
@@ -59,11 +63,11 @@ final class OfferGuidanceResolver
     }
 
     /**
-     * RuneLite reports Modify offer as a cancelled offer followed directly by a
-     * replacement in the same GE slot. No EMPTY state occurs in between. Keep
-     * the original guidance for that direct successor, including the buy-time
-     * break-even floor. A normal cancellation must first become EMPTY before a
-     * new offer can be placed and therefore does not match this predicate.
+     * RuneLite normally reports Modify offer as a cancelled offer followed
+     * directly by a replacement in the same GE slot. Under event coalescing the
+     * intermediate CANCELLED observation can be absent. In both cases the lack
+     * of an EMPTY state and the original/remaining quantity identify the direct
+     * successor, whose frozen cycle guidance must be retained.
      */
     static boolean continuesCancelledReprice(
         boolean sameItemAndSide,
@@ -74,8 +78,11 @@ final class OfferGuidanceResolver
         int previousFilledQuantity,
         int nextTotalQuantity)
     {
-        if (!sameItemAndSide || !"cancelled".equals(previousStatus) ||
-            previousPrice <= 0 || nextPrice <= 0 || previousPrice == nextPrice ||
+        boolean replaceableStatus = "cancelled".equals(previousStatus) ||
+            "active".equals(previousStatus) ||
+            "partially_filled".equals(previousStatus);
+        if (!sameItemAndSide || !replaceableStatus ||
+            previousPrice <= 0 || nextPrice <= 0 ||
             previousTotalQuantity <= 0 || nextTotalQuantity <= 0)
         {
             return false;
@@ -84,7 +91,9 @@ final class OfferGuidanceResolver
         int remainingQuantity = Math.max(
             0,
             previousTotalQuantity - Math.max(0, previousFilledQuantity));
-        return nextTotalQuantity == previousTotalQuantity ||
+        return (previousFilledQuantity <= 0 &&
+                nextPrice != previousPrice &&
+                nextTotalQuantity == previousTotalQuantity) ||
             (remainingQuantity > 0 && nextTotalQuantity == remainingQuantity);
     }
 

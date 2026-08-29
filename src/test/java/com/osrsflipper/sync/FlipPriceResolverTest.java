@@ -15,17 +15,17 @@ public class FlipPriceResolverTest
     }
 
     @Test
-    public void pricesUseTheStrongestWikiOrPriceTestReference()
+    public void confirmedPriceTestsTakePriorityOverWikiPrices()
     {
         LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_700, 20, 21);
-        assertEquals(1_754, FlipPriceResolver.buyPrice(opportunity(), priceTest));
+        assertEquals(1_701, FlipPriceResolver.buyPrice(opportunity(), priceTest));
         assertEquals(1_899, FlipPriceResolver.sellPrice(opportunity(), priceTest));
 
         LastTradePriceView higherPriceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
         assertEquals(1_801, FlipPriceResolver.buyPrice(opportunity(), higherPriceTest));
 
         LastTradePriceView lowerBuyPriceTest = new LastTradePriceView(101, 1_700, 1_800, 20, 21);
-        assertEquals(1_828, FlipPriceResolver.sellPrice(opportunity(), lowerBuyPriceTest));
+        assertEquals(1_699, FlipPriceResolver.sellPrice(opportunity(), lowerBuyPriceTest));
     }
 
     @Test
@@ -40,17 +40,30 @@ public class FlipPriceResolverTest
     }
 
     @Test
-    public void editorUsesTheFreshMarketPriceForANewOffer()
+    public void editorKeepsConfirmedPriceTestsAheadOfFreshWikiPrices()
     {
         RuneliteOverviewView.Opportunity overview = opportunity();
         MarketPriceView newerButDifferentMarket = new MarketPriceView(
             101, 2_500, 2_400, 30, 31, 32);
         LastTradePriceView priceTest = new LastTradePriceView(101, 1_900, 1_800, 20, 21);
 
-        assertEquals(2_401,
+        assertEquals(1_801,
             FlipPriceResolver.editorPrice("buy", overview, newerButDifferentMarket, priceTest));
-        assertEquals(2_499,
+        assertEquals(1_899,
             FlipPriceResolver.editorPrice("sell", overview, newerButDifferentMarket, priceTest));
+    }
+
+    @Test
+    public void editorUsesFreshWikiPricesWhenNoMatchingPriceTestExists()
+    {
+        RuneliteOverviewView.Opportunity overview = opportunity();
+        MarketPriceView freshMarket = new MarketPriceView(
+            101, 2_500, 2_400, 30, 31, 32);
+
+        assertEquals(2_401,
+            FlipPriceResolver.editorPrice("buy", overview, freshMarket, null));
+        assertEquals(2_499,
+            FlipPriceResolver.editorPrice("sell", overview, freshMarket, null));
     }
 
     @Test
@@ -110,6 +123,34 @@ public class FlipPriceResolverTest
         assertEquals(2_251, sell);
         assertEquals(6L, SessionStatsTracker.calculateProfitPerItem(buy, sell, "Kwarm"));
         assertEquals(58_374L, OsrsFlipperSyncPanel.displayedCycleProfit(kwarm, buy, sell));
+    }
+
+    @Test
+    public void personalSnapdragonPricesDoNotJumpToNewerWikiPrices()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(
+            101, 7_889, 7_630, 20, 21);
+        RuneliteOverviewView.Opportunity snapdragon = new RuneliteOverviewView.Opportunity(
+            101, "Snapdragon potion (unf)", "cycle_profit",
+            7_841, 7_888, 7_860, 7_840,
+            5_803, 0, 5_803, 0, 0, 22);
+
+        assertEquals(7_631, FlipPriceResolver.buyPrice(snapdragon, priceTest));
+        assertEquals(7_888, FlipPriceResolver.sellPrice(snapdragon, priceTest));
+    }
+
+    @Test
+    public void moonlightAntlerBoltsUseLastSellInsteadOfTheHigherWikiPrice()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(
+            101, 245, 228, 20, 21);
+        RuneliteOverviewView.Opportunity bolts = new RuneliteOverviewView.Opportunity(
+            101, "Moonlight antler bolts", "cycle_profit",
+            246, 244, 245, 245,
+            10_999, 0, 10_999, 0, 0, 22);
+
+        assertEquals(229, FlipPriceResolver.buyPrice(bolts, priceTest));
+        assertEquals(244, FlipPriceResolver.sellPrice(bolts, priceTest));
     }
 
     @Test
