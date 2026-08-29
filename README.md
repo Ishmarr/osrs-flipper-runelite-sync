@@ -1,6 +1,11 @@
-# OSRS Flipper Sync v5.2.17
+# OSRS Flipper Sync v5.2.18
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.18
+
+- Herstelt de koop- en verkoopvoorstellen op flipkaarten: een persoonlijke instant-sellprijs ankert de limit-kooporder en een persoonlijke instant-buyprijs ankert de limit-verkooporder.
+- Een bestaande offerinstantie behoudt nog steeds haar bevroren koop- en verkoopplan.
 
 ## Functies
 

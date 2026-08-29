@@ -58,6 +58,10 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
+        if (SelectedGeOpportunityResolver.isSelectedSetup(opportunity))
+        {
+            return Math.max(0, opportunity.buyPrice);
+        }
         if (priceTest != null && priceTest.lastBuyPrice > 0)
         {
             return priceTest.lastBuyPrice;
@@ -71,6 +75,10 @@ final class FlipPriceResolver
         RuneliteOverviewView.Opportunity opportunity,
         LastTradePriceView priceTest)
     {
+        if (SelectedGeOpportunityResolver.isSelectedSetup(opportunity))
+        {
+            return Math.max(0, opportunity.sellPrice);
+        }
         if (priceTest != null && priceTest.lastSellPrice > 0)
         {
             return priceTest.lastSellPrice;

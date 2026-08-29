@@ -79,6 +79,22 @@ public class FlipPriceResolverTest
     }
 
     @Test
+    public void selectedSetupShowsResolvedLimitPricesInsteadOfReversingPriceTests()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(
+            101, 7_634, 7_500, 20, 21);
+        RuneliteOverviewView.Opportunity selected = new RuneliteOverviewView.Opportunity(
+            101, "Battlestaff", "selected_setup",
+            7_501, 7_633, 7_634, 7_500,
+            10_331, 0, 10_331, 0, 0, 22);
+
+        assertEquals(7_501,
+            FlipPriceResolver.displayedBuyPrice(selected, priceTest));
+        assertEquals(7_633,
+            FlipPriceResolver.displayedSellPrice(selected, priceTest));
+    }
+
+    @Test
     public void panelFallsBackPerSideWhenTheMatchingPersonalPriceIsMissing()
     {
         LastTradePriceView onlySell = new LastTradePriceView(
