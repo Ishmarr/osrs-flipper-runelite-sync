@@ -1,4 +1,4 @@
-# OSRS Flipper Sync v5.2.15
+# OSRS Flipper Sync v5.2.16
 
 RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
 
@@ -178,6 +178,13 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - De plugin kan opnieuw normaal worden ingeschakeld: de eerste zijpaneelrefresh vraagt niet langer vanaf de Swing-thread om RuneLite-itemdefinities.
 - De naam van een geselecteerd GE-item wordt op de RuneLite-clientthread vastgelegd en daarna alleen uit die veilige cache gerenderd.
 - Een lege selectie bij het opstarten wordt direct afgehandeld zonder itemlookup.
+
+## Oplossing in v5.2.16
+
+- De normale Flip-lijst wordt ongeveer iedere minuut vernieuwd, zodat Wiki-prijzen niet meer tot vijf minuten achterlopen.
+- De vernieuwknop vraagt expliciet de nieuwste Wiki-marktdata op; gewone periodieke refreshes blijven de lichte Worker-cache gebruiken.
+- Een klik tijdens een lopende refresh blijft bewaard en wordt direct daarna als verse marktrefresh uitgevoerd.
+- De langere caches voor persoonlijke statistieken, cash, prijstests en buy limits blijven behouden, zodat de snellere marktrefresh geen brede D1-reads veroorzaakt.
 
 ## Configuratie
 
