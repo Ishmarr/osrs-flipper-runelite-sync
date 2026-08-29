@@ -20,12 +20,15 @@ final class FlipPriceResolver
         int fallbackBuyPrice,
         LastTradePriceView priceTest)
     {
-        wikiInstantSell = Math.max(0, wikiInstantSell);
         int lastSellPrice = priceTest == null ? 0 : Math.max(0, priceTest.lastSellPrice);
-        int strongestSellReference = Math.max(wikiInstantSell, lastSellPrice);
-        if (strongestSellReference > 0)
+        if (lastSellPrice > 0)
         {
-            return plusOne(strongestSellReference);
+            return plusOne(lastSellPrice);
+        }
+        wikiInstantSell = Math.max(0, wikiInstantSell);
+        if (wikiInstantSell > 0)
+        {
+            return plusOne(wikiInstantSell);
         }
         return Math.max(0, fallbackBuyPrice);
     }
@@ -44,12 +47,15 @@ final class FlipPriceResolver
         int fallbackSellPrice,
         LastTradePriceView priceTest)
     {
-        wikiInstantBuy = Math.max(0, wikiInstantBuy);
         int lastBuyPrice = priceTest == null ? 0 : Math.max(0, priceTest.lastBuyPrice);
-        int strongestBuyReference = Math.max(wikiInstantBuy, lastBuyPrice);
-        if (strongestBuyReference > 0)
+        if (lastBuyPrice > 0)
         {
-            return minusOne(strongestBuyReference);
+            return minusOne(lastBuyPrice);
+        }
+        wikiInstantBuy = Math.max(0, wikiInstantBuy);
+        if (wikiInstantBuy > 0)
+        {
+            return minusOne(wikiInstantBuy);
         }
         return Math.max(0, fallbackSellPrice);
     }
@@ -112,7 +118,9 @@ final class FlipPriceResolver
 
     private static boolean isFixedSelection(RuneliteOverviewView.Opportunity opportunity)
     {
-        return isActiveOffer(opportunity) || SelectedGeOpportunityResolver.isSelectedSetup(opportunity);
+        return isActiveOffer(opportunity) ||
+            SelectedGeOpportunityResolver.isSelectedSetup(opportunity) ||
+            SelectedGeOpportunityResolver.isOpenFlipCycle(opportunity);
     }
 
     private static int plusOne(int value)

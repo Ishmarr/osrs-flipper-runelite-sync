@@ -89,7 +89,7 @@ public class OfferGuidanceResolverTest
     }
 
     @Test
-    public void lowestPriceIsCapturedOnceAndSurvivesBuyRepricing()
+    public void buyPriceAndLowestPriceAreCapturedOnceAndSurviveBuyRepricing()
     {
         int frozenFloor = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
             9_398,
@@ -103,7 +103,7 @@ public class OfferGuidanceResolverTest
             new OfferGuidanceResolver.Guidance(9_398, 9_681, "", frozenFloor),
             true);
 
-        assertEquals(9_277, repriced.buyPrice);
+        assertEquals(9_398, repriced.buyPrice);
         assertEquals(9_589, repriced.lowestSellPrice);
     }
 
@@ -126,6 +126,22 @@ public class OfferGuidanceResolverTest
             2_846,
             1_634,
             1_212));
+        assertTrue(OfferGuidanceResolver.continuesCancelledReprice(
+            true,
+            "partially_filled",
+            9_681,
+            9_488,
+            2_846,
+            1_634,
+            1_212));
+        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+            true,
+            "partially_filled",
+            9_681,
+            9_488,
+            2_846,
+            1_634,
+            2_846));
 
         OfferGuidanceResolver.Guidance modified = OfferGuidanceResolver.reprice(
             "sell",
@@ -174,7 +190,7 @@ public class OfferGuidanceResolverTest
             true, "completed", 9_681, 9_488, 2_846, 1_634, 1_212));
         assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
             false, "cancelled", 9_681, 9_488, 2_846, 1_634, 1_212));
-        assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
+        assertTrue(OfferGuidanceResolver.continuesCancelledReprice(
             true, "cancelled", 9_681, 9_681, 2_846, 1_634, 1_212));
         assertFalse(OfferGuidanceResolver.continuesCancelledReprice(
             true, "cancelled", 9_681, 9_488, 2_846, 1_634, 1_211));

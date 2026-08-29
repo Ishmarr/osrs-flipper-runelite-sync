@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.19
+# OSRS Flipper Sync v5.2.20
 
-RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.20
+
+- Een geldige persoonlijke `Last sell price` bepaalt de nieuwe kooplimiet; Wiki instasell wordt alleen gebruikt wanneer die persoonlijke prijs ontbreekt. Voor verkoop geldt hetzelfde met `Last buy price` en Wiki instabuy.
+- Koopprijs en break-evenvloer worden lokaal en accountgebonden aan een persistente flipcyclus gekoppeld in plaats van aan één GE-slot. Ze blijven daardoor gelijk tijdens buy, collect, sell-setup, repricing, gedeeltelijke verkopen en de uiteindelijke sell.
+- Meerdere verkoopoffers reserveren uitsluitend de nog onverkochte hoeveelheid van dezelfde buy en kunnen de cyclus niet dubbel gebruiken.
+- De blauwe Wiki-prijzen blijven live bewegen zonder het bevroren flipplan te overschrijven.
 
 ## 5.2.19
 
@@ -22,7 +29,7 @@ RuneLite Plugin Hub-versie van de veilige koppeling tussen RuneLite en de OSRS F
 - vergelijkt de lokale toestand met de server en herstelt verschillen automatisch;
 - biedt een compact RuneLite-zijpaneel met **Slots**, **Flips**, **Stats** en **Sync**;
 - toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;
-- bewaart bij de start van een geadviseerde kooporder het toenmalige verkoopdoel in het lokale slot;
+- bewaart bij de start van een geadviseerde kooporder het koopplan in een accountgebonden flipcyclus die onafhankelijk is van het gebruikte GE-slot;
 - toont uitsluitend de vijf grootste flipwaardes vanaf 100.000 GP per volledige koop-verkoopcyclus;
 - toont per kans advieskoop, adviesverkoop, het relevante aantal en de actuele Wiki instabuy en instasell;
 - haalt winst, ROI, GP/u, GE-tax, handelsvolume en afgeronde flips voor vandaag, deze maand en totaal uit de webapp;

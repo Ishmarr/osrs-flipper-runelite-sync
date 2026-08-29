@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.19";
+    private static final String PLUGIN_VERSION = "5.2.20";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -100,6 +100,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final String SNAPSHOT_SEQUENCE_PREFIX = "snapshotSequence_";
     private static final String PENDING_SNAPSHOT_PREFIX = "pendingSnapshot_";
     private static final String LAST_TRADE_PRICES_PREFIX = "lastTradePrices_";
+    private static final String FLIP_CYCLES_PREFIX = "flipCycles_";
     private static final int SLOT_COUNT = 8;
     private static final int LOGIN_RECONCILE_TICKS = 8;
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
@@ -151,6 +152,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
     private final SessionStatsTracker sessionStats = new SessionStatsTracker();
     private final LastTradePriceBook lastTradePrices = new LastTradePriceBook();
+    private final FlipCyclePlanBook flipCycles = new FlipCyclePlanBook();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
 
     private long activeAccountHash = NO_ACCOUNT;
@@ -303,6 +305,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         serverStateNextAttemptAt = 0;
         workerBackoffUntil = 0;
         slotSnapshots.clear();
+        flipCycles.clear();
         outbox.clear();
         marketPrices.clear();
         marketPriceQueue.clear();
@@ -960,6 +963,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 processOffer(slot, offer, true);
             }
         }
+        repairUnlinkedSellCycles();
         refreshSidePanel();
         requestMarketPrices(false);
         queueFullSnapshot(reason);
@@ -1037,6 +1041,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         if (!sameOffer)
         {
+            releaseReplacedCycleState(previous, eventAt);
             long previousStart = previous == null ? 0 : previous.startedAt;
             long startedAt = Math.max(eventAt, previousStart + 1);
             next = new SlotSnapshot();
@@ -1075,7 +1080,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     continuingBuyOffer);
                 next.suggestedBuyPrice = guidance.buyPrice;
                 next.suggestedSellPrice = guidance.sellPrice;
-                next.sourceBuyOfferId = guidance.sourceBuyOfferId;
+                next.sourceBuyOfferId = !isBlank(guidance.sourceBuyOfferId)
+                    ? guidance.sourceBuyOfferId
+                    : (continuingBuyOffer && previous != null && !isBlank(previous.sourceBuyOfferId)
+                        ? previous.sourceBuyOfferId
+                        : next.offerId);
                 next.lowestSellPrice = guidance.lowestSellPrice;
                 next.suggestedSellPricePending = needsFreshSellPriceFor(itemId);
                 if (continuingBuyOffer)
@@ -1124,13 +1133,21 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 }
                 else
                 {
-                    OfferGuidanceResolver.BuyCandidate source = OfferGuidanceResolver.selectBuyForSell(
-                        slotNumber,
+                    FlipCyclePlanBook.Cycle sourceCycle = flipCycles.selectForSell(
                         itemId,
                         totalQuantity,
-                        startedAt,
-                        buyGuidanceCandidates(),
-                        linkedBuyOfferIds());
+                        startedAt);
+                    OfferGuidanceResolver.BuyCandidate source = buyCandidate(sourceCycle);
+                    if (source == null)
+                    {
+                        source = OfferGuidanceResolver.selectBuyForSell(
+                            slotNumber,
+                            itemId,
+                            totalQuantity,
+                            startedAt,
+                            buyGuidanceCandidates(),
+                            linkedBuyOfferIds());
+                    }
                     OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.linkedSell(
                         price,
                         currentSellCandidate,
@@ -1152,7 +1169,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 next.suggestedBuyPrice = price;
             }
-            if (next.lowestSellPrice <= 0 && next.suggestedBuyPrice > 0)
+            if ("buy".equals(side) && isBlank(next.sourceBuyOfferId))
+            {
+                next.sourceBuyOfferId = next.offerId;
+            }
+            if ("sell".equals(side) && isBlank(next.sourceBuyOfferId))
+            {
+                tryLinkSellToOpenCycle(next);
+            }
+            boolean mayHaveFrozenFloor = "buy".equals(side) ||
+                ("sell".equals(side) && !isBlank(next.sourceBuyOfferId));
+            if (mayHaveFrozenFloor && next.lowestSellPrice <= 0 && next.suggestedBuyPrice > 0)
             {
                 next.lowestSellPrice = OfferGuidanceResolver.freezeLowestSellPrice(
                     next.lowestSellPrice,
@@ -1212,6 +1239,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         slotSnapshots.put(slotNumber, next);
+        recordFlipCycle(next);
         enqueue(next.toSyncEvent(eventType));
         persistCurrentAccount();
         refreshSidePanel();
@@ -1246,6 +1274,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         next.fingerprint = fingerprint(next);
 
         slotSnapshots.put(slotNumber, next);
+        recordFlipCycle(next);
         enqueue(next.toSyncEvent("slot_emptied"));
         persistCurrentAccount();
         refreshSidePanel();
@@ -2003,6 +2032,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         persistCurrentAccount();
         slotSnapshots.clear();
+        flipCycles.clear();
         outbox.clear();
         pendingSnapshot = null;
         snapshotSequence = 0;
@@ -2083,11 +2113,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 ? null
                 : gson.fromJson(lastTradePricesJson, LastTradePriceBook.Entry[].class);
             lastTradePrices.restore(lastTradeEntries);
+
+            String flipCyclesJson = configManager.getConfiguration(
+                OsrsFlipperSyncConfig.GROUP, FLIP_CYCLES_PREFIX + accountKey());
+            FlipCyclePlanBook.Cycle[] persistedCycles = isBlank(flipCyclesJson)
+                ? null
+                : gson.fromJson(flipCyclesJson, FlipCyclePlanBook.Cycle[].class);
+            flipCycles.restore(persistedCycles);
+            recoverFlipCyclesFromSlots();
         }
         catch (RuntimeException exception)
         {
             LOG.error("Lokale GE-synchronisatiestatus kon niet worden gelezen", exception);
             slotSnapshots.clear();
+            flipCycles.clear();
             outbox.clear();
             lastTradePrices.clear();
         }
@@ -2122,6 +2161,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             OsrsFlipperSyncConfig.GROUP,
             LAST_TRADE_PRICES_PREFIX + accountKey(),
             gson.toJson(lastTradePrices.persistedEntries()));
+        configManager.setConfiguration(
+            OsrsFlipperSyncConfig.GROUP,
+            FLIP_CYCLES_PREFIX + accountKey(),
+            gson.toJson(flipCycles.persistedCycles()));
     }
 
     private void clearStoredPairing(String status)
@@ -2324,6 +2367,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             overview = response.toView();
             lastTradePrices.mergeAuthoritative(overview.priceTests);
+            refreshOpenCycleSellTargets();
             persistCurrentAccount();
             markWorkerSuccess();
             if (panel != null)
@@ -2656,7 +2700,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             overview.opportunityForItem(itemId),
             marketPrices.get(itemId),
             lastTradePrices.snapshot().get(itemId),
-            exact);
+            exact,
+            context == FocusedGeItemResolver.EditorContext.NEW_SETUP && "sell".equals(side)
+                ? openCycleOffer(itemId, side)
+                : null);
     }
 
     private FlipperOfferView exactSelectedOffer(int itemId, String side, int selectedSlot)
@@ -2907,6 +2954,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             queueMarketPrice(focusedGeItemId, force);
         }
+        boolean cycleGuidanceChanged = false;
+        for (Integer itemId : flipCycles.openItemIds())
+        {
+            if (itemId == null)
+            {
+                continue;
+            }
+            cycleGuidanceChanged |= refreshOpenCycleSellTarget(itemId);
+            queueMarketPrice(itemId, force || flipCycles.needsSellTarget(itemId));
+        }
+        if (cycleGuidanceChanged)
+        {
+            persistCurrentAccount();
+        }
         flushMarketPriceQueue();
     }
 
@@ -3012,6 +3073,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         now());
                     marketPrices.put(itemId, market);
                     capturePendingSellPrices(itemId, market);
+                    if (refreshOpenCycleSellTarget(itemId))
+                    {
+                        persistCurrentAccount();
+                    }
                     refreshSidePanel();
                 }
             }
@@ -3183,7 +3248,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         List<OfferGuidanceResolver.BuyCandidate> candidates = new ArrayList<>();
         for (SlotSnapshot snapshot : slotSnapshots.values())
         {
-            if (snapshot == null || !"buy".equals(snapshot.side))
+            if (snapshot == null || !"buy".equals(snapshot.side) ||
+                "empty".equals(snapshot.status))
             {
                 continue;
             }
@@ -3194,13 +3260,244 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 snapshot.filledQuantity,
                 snapshot.startedAt,
                 snapshot.lastEventAt,
-                snapshot.offerId,
+                isBlank(snapshot.sourceBuyOfferId) ? snapshot.offerId : snapshot.sourceBuyOfferId,
                 snapshot.itemName,
                 frozenBuyPrice,
                 snapshot.suggestedSellPrice,
                 snapshot.lowestSellPrice));
         }
         return candidates;
+    }
+
+    private void releaseReplacedCycleState(SlotSnapshot previous, long eventAt)
+    {
+        if (previous == null || "empty".equals(previous.status) || isTerminal(previous.status))
+        {
+            return;
+        }
+        if ("sell".equals(previous.side) && !isBlank(previous.sourceBuyOfferId))
+        {
+            flipCycles.releaseSell(
+                previous.sourceBuyOfferId,
+                previous.offerId,
+                previous.filledQuantity,
+                eventAt);
+            return;
+        }
+        if ("buy".equals(previous.side))
+        {
+            SlotSnapshot cancelled = previous.copy();
+            cancelled.status = "cancelled";
+            cancelled.lastEventAt = Math.max(previous.lastEventAt, eventAt);
+            recordFlipCycle(cancelled);
+        }
+    }
+
+    private static OfferGuidanceResolver.BuyCandidate buyCandidate(FlipCyclePlanBook.Cycle cycle)
+    {
+        if (cycle == null)
+        {
+            return null;
+        }
+        return new OfferGuidanceResolver.BuyCandidate(
+            cycle.slotNumber,
+            cycle.itemId,
+            cycle.availableQuantity(),
+            cycle.startedAt,
+            cycle.lastEventAt,
+            cycle.cycleId,
+            cycle.frozenBuyPrice,
+            cycle.sellTargetPrice,
+            cycle.lowestSellPrice);
+    }
+
+    private void recordFlipCycle(SlotSnapshot snapshot)
+    {
+        if (snapshot == null || snapshot.itemId <= 0 || isBlank(snapshot.offerId))
+        {
+            return;
+        }
+        if ("buy".equals(snapshot.side))
+        {
+            if (isBlank(snapshot.sourceBuyOfferId))
+            {
+                snapshot.sourceBuyOfferId = snapshot.offerId;
+                snapshot.fingerprint = fingerprint(snapshot);
+            }
+            flipCycles.recordBuy(
+                snapshot.sourceBuyOfferId,
+                snapshot.offerId,
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.itemName,
+                positiveOrFallback(snapshot.suggestedBuyPrice, snapshot.price),
+                snapshot.suggestedSellPrice,
+                snapshot.lowestSellPrice,
+                snapshot.totalQuantity,
+                snapshot.filledQuantity,
+                snapshot.status,
+                snapshot.startedAt,
+                snapshot.lastEventAt);
+            return;
+        }
+        if ("sell".equals(snapshot.side) && !isBlank(snapshot.sourceBuyOfferId))
+        {
+            flipCycles.recordSell(
+                snapshot.sourceBuyOfferId,
+                snapshot.offerId,
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.itemName,
+                snapshot.suggestedBuyPrice,
+                snapshot.suggestedSellPrice,
+                snapshot.lowestSellPrice,
+                snapshot.totalQuantity,
+                snapshot.filledQuantity,
+                snapshot.status,
+                snapshot.startedAt,
+                snapshot.lastEventAt);
+        }
+    }
+
+    private boolean refreshOpenCycleSellTarget(int itemId)
+    {
+        return flipCycles.raiseSellTarget(
+            itemId,
+            suggestedSellPriceFor(itemId));
+    }
+
+    private boolean refreshOpenCycleSellTargets()
+    {
+        boolean changed = false;
+        for (Integer itemId : flipCycles.openItemIds())
+        {
+            if (itemId != null)
+            {
+                changed |= refreshOpenCycleSellTarget(itemId);
+            }
+        }
+        return changed;
+    }
+
+    private void recoverFlipCyclesFromSlots()
+    {
+        List<SlotSnapshot> snapshots = new ArrayList<>(slotSnapshots.values());
+        snapshots.sort((left, right) ->
+        {
+            int byStart = Long.compare(left == null ? 0 : left.startedAt, right == null ? 0 : right.startedAt);
+            if (byStart != 0)
+            {
+                return byStart;
+            }
+            boolean leftBuy = left != null && "buy".equals(left.side);
+            boolean rightBuy = right != null && "buy".equals(right.side);
+            return leftBuy == rightBuy ? 0 : (leftBuy ? -1 : 1);
+        });
+        for (SlotSnapshot snapshot : snapshots)
+        {
+            recordFlipCycle(snapshot);
+        }
+    }
+
+    private void repairUnlinkedSellCycles()
+    {
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || "empty".equals(snapshot.status) ||
+                !"sell".equals(snapshot.side) || !isBlank(snapshot.sourceBuyOfferId) ||
+                !tryLinkSellToOpenCycle(snapshot))
+            {
+                continue;
+            }
+            snapshot.eventSequence = Math.max(1, snapshot.eventSequence + 1);
+            snapshot.lastEventAt = nextLogicalTime(snapshot.lastEventAt);
+            snapshot.fingerprint = fingerprint(snapshot);
+            recordFlipCycle(snapshot);
+            enqueue(snapshot.toSyncEvent("guidance_updated"));
+        }
+    }
+
+    private boolean tryLinkSellToOpenCycle(SlotSnapshot snapshot)
+    {
+        if (snapshot == null || !"sell".equals(snapshot.side) ||
+            !isBlank(snapshot.sourceBuyOfferId) || snapshot.itemId <= 0 ||
+            snapshot.totalQuantity <= 0)
+        {
+            return false;
+        }
+        FlipCyclePlanBook.Cycle sourceCycle = flipCycles.selectForSell(
+            snapshot.itemId,
+            snapshot.totalQuantity,
+            snapshot.startedAt);
+        OfferGuidanceResolver.BuyCandidate source = buyCandidate(sourceCycle);
+        if (source == null)
+        {
+            source = OfferGuidanceResolver.selectBuyForSell(
+                snapshot.slotNumber,
+                snapshot.itemId,
+                snapshot.totalQuantity,
+                snapshot.startedAt,
+                buyGuidanceCandidates(),
+                linkedBuyOfferIds());
+        }
+        if (source == null)
+        {
+            return false;
+        }
+        OfferGuidanceResolver.Guidance linked = OfferGuidanceResolver.linkedSell(
+            snapshot.price,
+            suggestedSellPriceFor(snapshot.itemId),
+            snapshot.startInstasellPrice,
+            source);
+        snapshot.suggestedBuyPrice = linked.buyPrice;
+        snapshot.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
+            snapshot.suggestedSellPrice,
+            linked.sellPrice);
+        snapshot.sourceBuyOfferId = linked.sourceBuyOfferId;
+        snapshot.lowestSellPrice = linked.lowestSellPrice;
+        return true;
+    }
+
+    private FlipperOfferView openCycleOffer(int itemId, String side)
+    {
+        FlipCyclePlanBook.Cycle cycle = "buy".equals(side)
+            ? flipCycles.selectOpenBuy(itemId)
+            : ("sell".equals(side) ? flipCycles.selectForSetup(itemId) : null);
+        if (cycle == null)
+        {
+            return null;
+        }
+        int quantity = "buy".equals(side)
+            ? cycle.displayedBuyQuantity()
+            : cycle.availableQuantity();
+        if (quantity <= 0)
+        {
+            return null;
+        }
+        MarketPriceView market = marketPrices.get(itemId);
+        RuneliteOverviewView.Opportunity liveOpportunity = overview.opportunityForItem(itemId);
+        int liveInstantBuy = market != null && market.instantBuyPrice > 0
+            ? market.instantBuyPrice
+            : (liveOpportunity == null ? 0 : liveOpportunity.instantBuy);
+        int liveInstantSell = market != null && market.instantSellPrice > 0
+            ? market.instantSellPrice
+            : (liveOpportunity == null ? 0 : liveOpportunity.instantSell);
+        return new FlipperOfferView(
+            cycle.slotNumber,
+            cycle.itemId,
+            cycle.itemName,
+            side,
+            "buy".equals(side) ? cycle.frozenBuyPrice : cycle.sellTargetPrice,
+            quantity,
+            0,
+            "cycle_pending_sell",
+            cycle.startedAt,
+            0,
+            cycle.frozenBuyPrice,
+            cycle.sellTargetPrice,
+            liveInstantBuy,
+            liveInstantSell,
+            cycle.lowestSellPrice);
     }
 
     private Set<String> linkedBuyOfferIds()

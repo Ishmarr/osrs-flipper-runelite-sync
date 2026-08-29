@@ -5,6 +5,7 @@ import java.util.Collections;
 final class SelectedGeOpportunityResolver
 {
     private static final String SELECTED_SETUP = "selected_setup";
+    private static final String OPEN_FLIP_CYCLE = "open_flip_cycle";
 
     private SelectedGeOpportunityResolver()
     {
@@ -19,6 +20,29 @@ final class SelectedGeOpportunityResolver
         MarketPriceView market,
         LastTradePriceView priceTest,
         FlipperOfferView exactActiveOffer)
+    {
+        return resolve(
+            context,
+            itemId,
+            itemName,
+            side,
+            scannerOpportunity,
+            market,
+            priceTest,
+            exactActiveOffer,
+            null);
+    }
+
+    static Resolution resolve(
+        FocusedGeItemResolver.EditorContext context,
+        int itemId,
+        String itemName,
+        String side,
+        RuneliteOverviewView.Opportunity scannerOpportunity,
+        MarketPriceView market,
+        LastTradePriceView priceTest,
+        FlipperOfferView exactActiveOffer,
+        FlipperOfferView openCycle)
     {
         if (itemId <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
         {
@@ -57,6 +81,43 @@ final class SelectedGeOpportunityResolver
         if (context != FocusedGeItemResolver.EditorContext.NEW_SETUP)
         {
             return Resolution.empty();
+        }
+
+        if ("sell".equals(side) && openCycle != null &&
+            openCycle.itemId == itemId && side.equals(openCycle.side))
+        {
+            boolean matchingMarket = market != null && market.itemId == itemId;
+            int instantBuy = matchingMarket && market.instantBuyPrice > 0
+                ? market.instantBuyPrice
+                : openCycle.wikiInstantBuyPrice;
+            int instantSell = matchingMarket && market.instantSellPrice > 0
+                ? market.instantSellPrice
+                : openCycle.wikiInstantSellPrice;
+            int buyPrice = openCycle.suggestedBuyPrice > 0
+                ? openCycle.suggestedBuyPrice
+                : openCycle.price;
+            int sellPrice = openCycle.suggestedSellPrice > 0
+                ? openCycle.suggestedSellPrice
+                : openCycle.price;
+            long priceUpdatedAt = matchingMarket
+                ? Math.max(market.instantBuyAt, market.instantSellAt)
+                : 0;
+            RuneliteOverviewView.Opportunity frozen = new RuneliteOverviewView.Opportunity(
+                itemId,
+                openCycle.itemName,
+                OPEN_FLIP_CYCLE,
+                buyPrice,
+                sellPrice,
+                instantBuy,
+                instantSell,
+                openCycle.totalQuantity,
+                0,
+                openCycle.totalQuantity,
+                0,
+                0,
+                priceUpdatedAt,
+                openCycle.lowestSellPrice);
+            return new Resolution(frozen);
         }
 
         boolean matchingMarket = market != null && market.itemId == itemId;
@@ -106,6 +167,11 @@ final class SelectedGeOpportunityResolver
     static boolean isSelectedSetup(RuneliteOverviewView.Opportunity opportunity)
     {
         return opportunity != null && SELECTED_SETUP.equals(opportunity.ranking);
+    }
+
+    static boolean isOpenFlipCycle(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return opportunity != null && OPEN_FLIP_CYCLE.equals(opportunity.ranking);
     }
 
     static final class Resolution
