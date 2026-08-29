@@ -519,21 +519,27 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
         boolean activeBuyOffer = "active_buy".equals(opportunity.ranking);
         boolean activeSellOffer = "active_sell".equals(opportunity.ranking);
+        LastTradePriceView lastTrade = lastTradePrices.get(opportunity.itemId);
+        int displayedBuyPrice = displayedBuyPrice(opportunity, lastTrade);
+        int displayedSellPrice = displayedSellPrice(opportunity, lastTrade);
+        long displayedCycleProfit = displayedCycleProfit(
+            opportunity,
+            displayedBuyPrice,
+            displayedSellPrice);
         JLabel profit = new JLabel(activeBuyOffer
             ? "Actief koopoffer"
-            : (activeSellOffer ? "Actief verkoopoffer" : formatGp(opportunity.maximumCycleProfit)));
-        profit.setForeground(activeSellOffer ? GOLD : GREEN);
+            : (activeSellOffer ? "Actief verkoopoffer" : formatGp(displayedCycleProfit)));
+        profit.setForeground(activeSellOffer
+            ? GOLD
+            : (activeBuyOffer || displayedCycleProfit >= 0 ? GREEN : RED));
         profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
         profit.setAlignmentX(Component.LEFT_ALIGNMENT);
         profit.setBorder(new EmptyBorder(3, 0, 3, 0));
         card.add(profit);
 
-        LastTradePriceView lastTrade = lastTradePrices.get(opportunity.itemId);
         boolean focusedCard = opportunity.itemId == focusedItemId;
         boolean buying = focusedCard && "buy".equals(focusedOfferSide);
         boolean selling = focusedCard && "sell".equals(focusedOfferSide);
-        int displayedBuyPrice = displayedBuyPrice(opportunity, lastTrade);
-        int displayedSellPrice = displayedSellPrice(opportunity, lastTrade);
         card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
         card.add(coloredMetric("Koop", priceOrDash(displayedBuyPrice), GOLD, buying));
         card.add(coloredMetric("Verkoop", priceOrDash(displayedSellPrice), GOLD, selling));
@@ -591,6 +597,21 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         LastTradePriceView lastTrade)
     {
         return FlipPriceResolver.displayedSellPrice(opportunity, lastTrade);
+    }
+
+    static long displayedCycleProfit(
+        RuneliteOverviewView.Opportunity opportunity,
+        int displayedBuyPrice,
+        int displayedSellPrice)
+    {
+        if (opportunity == null || displayedBuyPrice <= 0 || displayedSellPrice <= 0)
+        {
+            return opportunity == null ? 0L : opportunity.maximumCycleProfit;
+        }
+        return SessionStatsTracker.calculateProfitPerItem(
+            displayedBuyPrice,
+            displayedSellPrice,
+            opportunity.itemName) * Math.max(0L, opportunity.maximumQuantity);
     }
 
     private static JButton primaryActionButton(String text)

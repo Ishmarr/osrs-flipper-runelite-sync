@@ -67,14 +67,14 @@ public class FlipPriceResolverTest
     }
 
     @Test
-    public void panelMapsPersonalFillPricesToTheMatchingBuyAndSellRows()
+    public void panelUsesInstantSellForBuyAndInstantBuyForSell()
     {
         LastTradePriceView priceTest = new LastTradePriceView(
             101, 9_141, 8_000, 20, 21);
 
-        assertEquals(9_141,
+        assertEquals(8_001,
             FlipPriceResolver.displayedBuyPrice(opportunity(), priceTest));
-        assertEquals(8_000,
+        assertEquals(9_140,
             FlipPriceResolver.displayedSellPrice(opportunity(), priceTest));
     }
 
@@ -95,6 +95,24 @@ public class FlipPriceResolverTest
     }
 
     @Test
+    public void kwarmCardUsesConsistentPricesAndProfit()
+    {
+        LastTradePriceView priceTest = new LastTradePriceView(
+            263, 2_252, 2_199, 20, 21);
+        RuneliteOverviewView.Opportunity kwarm = new RuneliteOverviewView.Opportunity(
+            263, "Kwarm", "cycle_profit",
+            2_102, 2_251, 2_252, 2_101,
+            9_729, 1_011_816, 9_729, 1_011_816, 1_011_816, 22);
+
+        int buy = FlipPriceResolver.displayedBuyPrice(kwarm, priceTest);
+        int sell = FlipPriceResolver.displayedSellPrice(kwarm, priceTest);
+        assertEquals(2_200, buy);
+        assertEquals(2_251, sell);
+        assertEquals(6L, SessionStatsTracker.calculateProfitPerItem(buy, sell, "Kwarm"));
+        assertEquals(58_374L, OsrsFlipperSyncPanel.displayedCycleProfit(kwarm, buy, sell));
+    }
+
+    @Test
     public void panelFallsBackPerSideWhenTheMatchingPersonalPriceIsMissing()
     {
         LastTradePriceView onlySell = new LastTradePriceView(
@@ -102,13 +120,13 @@ public class FlipPriceResolverTest
         LastTradePriceView onlyBuy = new LastTradePriceView(
             101, 9_141, 0, 20, 0);
 
-        assertEquals(1_754,
+        assertEquals(8_001,
             FlipPriceResolver.displayedBuyPrice(opportunity(), onlySell));
-        assertEquals(8_000,
-            FlipPriceResolver.displayedSellPrice(opportunity(), onlySell));
-        assertEquals(9_141,
-            FlipPriceResolver.displayedBuyPrice(opportunity(), onlyBuy));
         assertEquals(1_828,
+            FlipPriceResolver.displayedSellPrice(opportunity(), onlySell));
+        assertEquals(1_754,
+            FlipPriceResolver.displayedBuyPrice(opportunity(), onlyBuy));
+        assertEquals(9_140,
             FlipPriceResolver.displayedSellPrice(opportunity(), onlyBuy));
     }
 
