@@ -316,6 +316,18 @@ final class FlipCyclePlanBook
         return changed;
     }
 
+    boolean raiseSellTarget(String cycleId, int candidatePrice)
+    {
+        Cycle cycle = cycles.get(clean(cycleId));
+        int safeCandidate = Math.max(0, candidatePrice);
+        if (cycle == null || cycle.isClosed() || safeCandidate <= cycle.sellTargetPrice)
+        {
+            return false;
+        }
+        cycle.sellTargetPrice = safeCandidate;
+        return true;
+    }
+
     int expireOpenCycles(int itemId, long clearedAt)
     {
         if (itemId <= 0 || clearedAt <= 0)
