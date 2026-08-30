@@ -1,5 +1,6 @@
 package com.osrsflipper.sync;
 
+import com.google.gson.Gson;
 import java.util.Map;
 import java.util.Collections;
 import org.junit.Test;
@@ -242,67 +243,182 @@ public class LastTradePriceBookTest
     }
 
     @Test
-    public void requestsAuthoritativeExpiryAtTenMinutesOnlyOncePerPublishedTest()
+    public void positiveServerGenerationWinsATieWithAnOlderTombstone()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_012, 0, 0, 0, 0, 300)));
+
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_012, 2_100, 1_800, 300, 300, 300)));
+
+        assertEquals(2_100, book.snapshot().get(1_012).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_012).lastSellPrice);
+        assertEquals(0, book.persistedEntries().get(0).clearedAt);
+    }
+
+    @Test
+    public void repeatedStaleTombstoneCannotEraseAPositiveSameSecondGeneration()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_014, 0, 0, 0, 0, 300)));
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_014, 2_100, 1_800, 300, 300, 300)));
+
+        Gson gson = new Gson();
+        LastTradePriceBook restored = new LastTradePriceBook();
+        restored.restore(gson.fromJson(
+            gson.toJson(book.persistedEntries()),
+            LastTradePriceBook.Entry[].class));
+        Map<Integer, Long> repeated = restored.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_014, 0, 0, 0, 0, 300)));
+
+        assertTrue(repeated.isEmpty());
+        assertEquals(2_100, restored.snapshot().get(1_014).lastBuyPrice);
+        assertEquals(1_800, restored.snapshot().get(1_014).lastSellPrice);
+
+        Map<Integer, Long> nextGeneration = restored.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_014, 0, 0, 0, 0, 301)));
+        assertEquals(Long.valueOf(301), nextGeneration.get(1_014));
+        assertFalse(restored.snapshot().containsKey(1_014));
+    }
+
+    @Test
+    public void positiveResponseCannotOverwriteALocalTestChangedAfterTheRequestStarted()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_013, 2_000, 1_900, 300, 300)));
+        long requestRevision = book.revision();
+
+        book.recordTransition(
+            1_013, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.recordTransition(
+            1_013, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 300);
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_013, 2_000, 1_900, 300, 300)), requestRevision);
+
+        assertEquals(2_100, book.snapshot().get(1_013).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_013).lastSellPrice);
+    }
+
+    @Test
+    public void delayedPositiveResponseCannotConsumeANewerPendingBuyAtTheSameSecond()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_015, 2_000, 1_900, 300, 300)));
+        long requestRevision = book.revision();
+
+        book.recordTransition(
+            1_015, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_015, 2_000, 1_900, 300, 300)), requestRevision);
+        book.recordTransition(
+            1_015, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertEquals(2_100, book.snapshot().get(1_015).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_015).lastSellPrice);
+    }
+
+    @Test
+    public void delayedTombstoneCannotEraseALocalPositiveGenerationCompletedAfterRequestStart()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_016, 2_000, 1_900, 100, 101)));
+        long requestRevision = book.revision();
+
+        book.recordTransition(
+            1_016, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.recordTransition(
+            1_016, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 300);
+        Map<Integer, Long> clear = book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_016, 0, 0, 0, 0, 300)), requestRevision);
+
+        assertEquals(Long.valueOf(300), clear.get(1_016));
+        assertEquals(2_100, book.snapshot().get(1_016).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_016).lastSellPrice);
+
+        assertTrue(book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_016, 0, 0, 0, 0, 300))).isEmpty());
+        assertEquals(2_100, book.snapshot().get(1_016).lastBuyPrice);
+    }
+
+    @Test
+    public void delayedTombstoneCannotConsumeANewerPendingBuyAtTheSameSecond()
+    {
+        LastTradePriceBook book = new LastTradePriceBook();
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_017, 2_000, 1_900, 100, 101)));
+        long requestRevision = book.revision();
+
+        book.recordTransition(
+            1_017, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_017, 0, 0, 0, 0, 300)), requestRevision);
+        book.recordTransition(
+            1_017, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertEquals(2_100, book.snapshot().get(1_017).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_017).lastSellPrice);
+    }
+
+    @Test
+    public void restartKeepsAPendingBuyThatTiesTheAuthoritativeTombstone()
+    {
+        LastTradePriceBook original = new LastTradePriceBook();
+        original.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_018, 0, 0, 0, 0, 300)));
+        original.recordTransition(
+            1_018, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+
+        LastTradePriceBook restored = new LastTradePriceBook();
+        Gson gson = new Gson();
+        restored.restore(gson.fromJson(
+            gson.toJson(original.persistedEntries()),
+            LastTradePriceBook.Entry[].class));
+        restored.recordTransition(
+            1_018, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
+
+        assertEquals(2_100, restored.snapshot().get(1_018).lastBuyPrice);
+        assertEquals(1_800, restored.snapshot().get(1_018).lastSellPrice);
+    }
+
+    @Test
+    public void reportsANewAuthoritativeTombstoneOnlyOnce()
     {
         LastTradePriceBook book = new LastTradePriceBook();
         book.mergeAuthoritative(Collections.singletonList(
             new LastTradePriceView(1_111, 2_000, 1_900, 100, 101)));
 
-        assertFalse(book.markAuthoritativeExpiryRefreshDue(700, Collections.emptySet()));
-        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
-        assertFalse(book.markAuthoritativeExpiryRefreshDue(702, Collections.emptySet()));
-        assertEquals(101, book.persistedEntries().get(0).expiryRefreshForAt);
+        Map<Integer, Long> first = book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_111, 0, 0, 0, 0, 701)));
+        Map<Integer, Long> repeated = book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_111, 0, 0, 0, 0, 701)));
 
-        LastTradePriceBook restored = new LastTradePriceBook();
-        restored.restore(book.persistedEntries().toArray(new LastTradePriceBook.Entry[0]));
-        assertFalse(restored.markAuthoritativeExpiryRefreshDue(800, Collections.emptySet()));
-
-        restored.recordTransition(1_111, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 900);
-        restored.recordTransition(1_111, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 901);
-        assertFalse(restored.markAuthoritativeExpiryRefreshDue(1_500, Collections.emptySet()));
-        assertTrue(restored.markAuthoritativeExpiryRefreshDue(1_501, Collections.emptySet()));
+        assertEquals(Long.valueOf(701), first.get(1_111));
+        assertTrue(repeated.isEmpty());
+        assertFalse(book.snapshot().containsKey(1_111));
     }
 
     @Test
-    public void openRealOfferDefersAuthoritativeExpiryRefresh()
+    public void oldOverviewTombstoneCannotOverrideANewerLocalPriceTest()
     {
         LastTradePriceBook book = new LastTradePriceBook();
         book.mergeAuthoritative(Collections.singletonList(
             new LastTradePriceView(1_212, 2_000, 1_900, 100, 101)));
+        book.recordTransition(
+            1_212, "buy", 0, 0, 1, 2_100, 1, "completed", 2_100, 300);
+        book.recordTransition(
+            1_212, "sell", 0, 0, 1, 1_800, 1, "completed", 1_800, 301);
 
-        assertFalse(book.markAuthoritativeExpiryRefreshDue(
-            701,
-            Collections.singleton(1_212)));
-        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
-    }
+        Map<Integer, Long> clears = book.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(1_212, 0, 0, 0, 0, 200)));
 
-    @Test
-    public void everyOpenBuyOrSellOfferProtectsPublishedPriceTests()
-    {
-        assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "pending"));
-        assertTrue(LastTradePriceBook.isOpenOffer("buy", 1, "active"));
-        assertTrue(LastTradePriceBook.isOpenOffer("buy", 2, "active"));
-        assertTrue(LastTradePriceBook.isOpenOffer("sell", 2, "partially_filled"));
-
-        assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "pending"));
-        assertFalse(LastTradePriceBook.isOpenOffer("buy", 0, "active"));
-        assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "completed"));
-        assertFalse(LastTradePriceBook.isOpenOffer("sell", 2, "cancelled"));
-        assertFalse(LastTradePriceBook.isOpenOffer("unknown", 2, "active"));
-    }
-
-    @Test
-    public void expiryRefreshMarkerNeverBlocksAuthoritativeTombstone()
-    {
-        LastTradePriceBook book = new LastTradePriceBook();
-        book.mergeAuthoritative(Collections.singletonList(
-            new LastTradePriceView(1_313, 2_000, 1_900, 100, 101)));
-        assertTrue(book.markAuthoritativeExpiryRefreshDue(701, Collections.emptySet()));
-
-        book.mergeAuthoritative(Collections.singletonList(
-            new LastTradePriceView(1_313, 0, 0, 0, 0, 701)));
-
-        assertFalse(book.snapshot().containsKey(1_313));
-        assertEquals(701, book.persistedEntries().get(0).clearedAt);
+        assertEquals(Long.valueOf(200), clears.get(1_212));
+        assertEquals(2_100, book.snapshot().get(1_212).lastBuyPrice);
+        assertEquals(1_800, book.snapshot().get(1_212).lastSellPrice);
     }
 }
