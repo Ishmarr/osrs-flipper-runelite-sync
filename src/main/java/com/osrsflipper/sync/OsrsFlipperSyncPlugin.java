@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.21";
+    private static final String PLUGIN_VERSION = "5.2.22";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -1076,7 +1076,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             captureStartMarketSnapshot(next);
             if ("buy".equals(side))
             {
-                int currentSellCandidate = suggestedSellPriceFor(itemId);
                 boolean continuingBuyOffer = OfferGuidanceResolver.continuesOfferLifecycle(
                     sameOfferShape(previous, itemId, side, totalQuantity),
                     previous == null ? "" : previous.status) ||
@@ -1086,6 +1085,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         side,
                         price,
                         totalQuantity);
+                int currentSellCandidate = continuingBuyOffer
+                    ? liveWikiSellRaiseCandidateFor(itemId)
+                    : initialSuggestedSellPriceFor(itemId);
                 OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.buy(
                     price,
                     currentSellCandidate,
@@ -1116,7 +1118,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             else
             {
-                int currentSellCandidate = suggestedSellPriceFor(itemId);
                 boolean continuingSellOffer = OfferGuidanceResolver.continuesOfferLifecycle(
                     sameOfferShape(previous, itemId, side, totalQuantity),
                     previous == null ? "" : previous.status) ||
@@ -1128,6 +1129,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         totalQuantity);
                 if (continuingSellOffer)
                 {
+                    int currentSellCandidate = liveWikiSellRaiseCandidateFor(itemId);
                     OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.reprice(
                         side,
                         price,
@@ -1162,6 +1164,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                             buyGuidanceCandidates(),
                             linkedBuyOfferIds());
                     }
+                    int currentSellCandidate = source == null
+                        ? initialSuggestedSellPriceFor(itemId)
+                        : liveWikiSellRaiseCandidateFor(itemId);
                     OfferGuidanceResolver.Guidance guidance = OfferGuidanceResolver.linkedSell(
                         price,
                         currentSellCandidate,
@@ -1893,20 +1898,32 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 local.startInstasellPrice = server.start_instasell_price;
             }
+            FlipCyclePlanBook.Cycle linkedCycle = cycleForSnapshot(local);
+            boolean linkedCycleClosed = linkedCycle != null && linkedCycle.isClosed();
             if (server.suggested_buy_price > 0 &&
+                !linkedCycleClosed &&
                 (firstServerAdoption || local.suggestedBuyPrice <= 0))
             {
                 local.suggestedBuyPrice = server.suggested_buy_price;
             }
-            if (server.suggested_sell_price > 0)
+            if (server.suggested_sell_price > 0 && !linkedCycleClosed)
             {
                 local.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
                     local.suggestedSellPrice,
                     server.suggested_sell_price);
             }
-            local.lowestSellPrice = OfferGuidanceResolver.adoptServerLowestSellPrice(
-                local.lowestSellPrice,
-                server.lowest_sell_price);
+            if (!linkedCycleClosed)
+            {
+                local.lowestSellPrice = OfferGuidanceResolver.adoptServerLowestSellPrice(
+                    local.lowestSellPrice,
+                    server.lowest_sell_price);
+            }
+            if (linkedCycle != null && !linkedCycleClosed)
+            {
+                flipCycles.raiseSellTarget(
+                    linkedCycle.cycleId,
+                    local.suggestedSellPrice);
+            }
             local.eventSequence = Math.max(local.eventSequence, server.event_sequence);
             local.lastEventAt = Math.max(local.lastEventAt, server.last_event_at);
             local.fingerprint = fingerprint(local);
@@ -2503,7 +2520,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // afwezigheidsdeadline niet opnieuw laten beginnen.
             fullyExpiredItems.removeAll(trackedGuidanceItemIds());
             geItemPresence.forget(fullyExpiredItems);
-            refreshOpenCycleSellTargets();
+            refreshOpenFlipSellGuidance();
             persistCurrentAccount();
             markWorkerSuccess();
             if (panel != null)
@@ -2921,11 +2938,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         MarketPriceView market = marketPrices.get(snapshot.itemId);
         RuneliteOverviewView.Opportunity liveOpportunity = overview.opportunityForItem(snapshot.itemId);
-        int liveInstantBuy = market != null && market.instantBuyPrice > 0
-            ? market.instantBuyPrice
-            : (liveOpportunity != null && liveOpportunity.instantBuy > 0
-                ? liveOpportunity.instantBuy
-                : snapshot.startInstabuyPrice);
+        int liveInstantBuy = positiveOrFallback(
+            SellTargetPriceResolver.wikiInstantBuy(market, liveOpportunity),
+            snapshot.startInstabuyPrice);
         int liveInstantSell = market != null && market.instantSellPrice > 0
             ? market.instantSellPrice
             : (liveOpportunity != null && liveOpportunity.instantSell > 0
@@ -3101,12 +3116,19 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
     }
 
-    private int suggestedSellPriceFor(int itemId)
+    private int initialSuggestedSellPriceFor(int itemId)
     {
-        return SellTargetPriceResolver.provisional(
+        return SellTargetPriceResolver.initial(
             marketPrices.get(itemId),
             overview.opportunityForItem(itemId),
             lastTradePrices.snapshot().get(itemId));
+    }
+
+    private int liveWikiSellRaiseCandidateFor(int itemId)
+    {
+        return SellTargetPriceResolver.liveWikiRaiseCandidate(
+            marketPrices.get(itemId),
+            overview.opportunityForItem(itemId));
     }
 
     private void captureStartMarketSnapshot(SlotSnapshot snapshot)
@@ -3117,9 +3139,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         MarketPriceView market = marketPrices.get(snapshot.itemId);
         RuneliteOverviewView.Opportunity opportunity = overview.opportunityForItem(snapshot.itemId);
-        snapshot.startInstabuyPrice = market != null && market.instantBuyPrice > 0
-            ? market.instantBuyPrice
-            : (opportunity == null ? 0 : opportunity.instantBuy);
+        snapshot.startInstabuyPrice = SellTargetPriceResolver.wikiInstantBuy(
+            market,
+            opportunity);
         snapshot.startInstasellPrice = market != null && market.instantSellPrice > 0
             ? market.instantSellPrice
             : (opportunity == null ? 0 : opportunity.instantSell);
@@ -3155,7 +3177,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 continue;
             }
-            cycleGuidanceChanged |= refreshOpenCycleSellTarget(itemId);
+            cycleGuidanceChanged |= refreshOpenFlipSellGuidance(itemId);
             queueMarketPrice(itemId, force || flipCycles.needsSellTarget(itemId));
         }
         if (cycleGuidanceChanged)
@@ -3267,7 +3289,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         now());
                     marketPrices.put(itemId, market);
                     capturePendingSellPrices(itemId, market);
-                    if (refreshOpenCycleSellTarget(itemId))
+                    if (refreshOpenFlipSellGuidance(itemId))
                     {
                         persistCurrentAccount();
                     }
@@ -3288,7 +3310,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void capturePendingSellPrices(int itemId, MarketPriceView market)
     {
-        int capturedPrice = suggestedSellPriceFor(itemId);
+        int capturedPrice = SellTargetPriceResolver.captured(market);
         boolean changed = false;
         for (SlotSnapshot snapshot : slotSnapshots.values())
         {
@@ -3306,17 +3328,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (snapshot.startInstasellPrice <= 0 && market.instantSellPrice > 0)
             {
                 snapshot.startInstasellPrice = market.instantSellPrice;
-                syncChanged = true;
-            }
-            if (("buy".equals(snapshot.side) || "sell".equals(snapshot.side)) &&
-                capturedPrice > snapshot.suggestedSellPrice)
-            {
-                snapshot.suggestedSellPrice = SellTargetPriceResolver.raiseOnly(
-                    snapshot.suggestedSellPrice,
-                    capturedPrice);
-                snapshot.suggestedSellPriceCapturedAt = market.instantBuyAt > 0
-                    ? market.instantBuyAt
-                    : market.fetchedAt;
                 syncChanged = true;
             }
             if ("buy".equals(snapshot.side) &&
@@ -3553,24 +3564,104 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
     }
 
-    private boolean refreshOpenCycleSellTarget(int itemId)
+    /**
+     * Applies live sell guidance through one path for both the persistent flip
+     * cycle and every visible slot that belongs to it. A running cycle may only
+     * receive the Wiki instabuy-minus-one candidate; Last buy is intentionally
+     * limited to initialSuggestedSellPriceFor().
+     */
+    private boolean refreshOpenFlipSellGuidance(int itemId)
     {
-        return flipCycles.raiseSellTarget(
-            itemId,
-            suggestedSellPriceFor(itemId));
+        int wikiCandidate = liveWikiSellRaiseCandidateFor(itemId);
+        boolean changed = flipCycles.raiseSellTarget(itemId, wikiCandidate);
+
+        // Phase 1: merge every linked snapshot target into its own cycle. This
+        // must finish before any snapshot is written back; HashMap iteration
+        // order may otherwise leave an earlier slot below a later slot's target.
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || snapshot.itemId != itemId ||
+                "empty".equals(snapshot.status))
+            {
+                continue;
+            }
+            FlipCyclePlanBook.Cycle cycle = openCycleForSnapshot(snapshot);
+            if (cycle == null)
+            {
+                continue;
+            }
+
+            // A higher account-synchronised snapshot target belongs only to
+            // its linked cycle, not to every parallel cycle of the same item.
+            changed |= flipCycles.raiseSellTarget(
+                cycle.cycleId,
+                snapshot.suggestedSellPrice);
+        }
+
+        // Phase 2: copy each cycle's final maximum to all of its visible slots.
+        for (SlotSnapshot snapshot : slotSnapshots.values())
+        {
+            if (snapshot == null || snapshot.itemId != itemId ||
+                "empty".equals(snapshot.status))
+            {
+                continue;
+            }
+            FlipCyclePlanBook.Cycle cycle = openCycleForSnapshot(snapshot);
+            if (cycle == null || cycle.isClosed() ||
+                cycle.sellTargetPrice <= snapshot.suggestedSellPrice)
+            {
+                continue;
+            }
+
+            int previousTarget = snapshot.suggestedSellPrice;
+            snapshot.suggestedSellPrice = cycle.sellTargetPrice;
+            if (wikiCandidate > previousTarget)
+            {
+                snapshot.suggestedSellPriceCapturedAt = now();
+            }
+            snapshot.eventSequence = Math.max(1, snapshot.eventSequence + 1);
+            snapshot.lastEventAt = nextLogicalTime(snapshot.lastEventAt);
+            snapshot.fingerprint = fingerprint(snapshot);
+            enqueue(snapshot.toSyncEvent("guidance_updated"));
+            changed = true;
+        }
+        return changed;
     }
 
-    private boolean refreshOpenCycleSellTargets()
+    private boolean refreshOpenFlipSellGuidance()
     {
         boolean changed = false;
         for (Integer itemId : flipCycles.openItemIds())
         {
             if (itemId != null)
             {
-                changed |= refreshOpenCycleSellTarget(itemId);
+                changed |= refreshOpenFlipSellGuidance(itemId);
             }
         }
         return changed;
+    }
+
+    private FlipCyclePlanBook.Cycle openCycleForSnapshot(SlotSnapshot snapshot)
+    {
+        FlipCyclePlanBook.Cycle cycle = cycleForSnapshot(snapshot);
+        return cycle == null || cycle.isClosed() ? null : cycle;
+    }
+
+    private FlipCyclePlanBook.Cycle cycleForSnapshot(SlotSnapshot snapshot)
+    {
+        if (snapshot == null || snapshot.itemId <= 0 ||
+            "empty".equals(snapshot.status) ||
+            !("buy".equals(snapshot.side) || "sell".equals(snapshot.side)))
+        {
+            return null;
+        }
+        String cycleId = !isBlank(snapshot.sourceBuyOfferId)
+            ? snapshot.sourceBuyOfferId
+            : ("buy".equals(snapshot.side) ? snapshot.offerId : "");
+        FlipCyclePlanBook.Cycle cycle = flipCycles.cycle(cycleId);
+        return cycle == null || cycle.itemId != snapshot.itemId
+            ? null
+            : cycle;
     }
 
     private void recoverFlipCyclesFromSlots()
@@ -3640,7 +3731,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         OfferGuidanceResolver.Guidance linked = OfferGuidanceResolver.linkedSell(
             snapshot.price,
-            suggestedSellPriceFor(snapshot.itemId),
+            liveWikiSellRaiseCandidateFor(snapshot.itemId),
             snapshot.startInstasellPrice,
             source);
         snapshot.suggestedBuyPrice = linked.buyPrice;
@@ -3670,9 +3761,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         MarketPriceView market = marketPrices.get(itemId);
         RuneliteOverviewView.Opportunity liveOpportunity = overview.opportunityForItem(itemId);
-        int liveInstantBuy = market != null && market.instantBuyPrice > 0
-            ? market.instantBuyPrice
-            : (liveOpportunity == null ? 0 : liveOpportunity.instantBuy);
+        int liveInstantBuy = SellTargetPriceResolver.wikiInstantBuy(
+            market,
+            liveOpportunity);
         int liveInstantSell = market != null && market.instantSellPrice > 0
             ? market.instantSellPrice
             : (liveOpportunity == null ? 0 : liveOpportunity.instantSell);

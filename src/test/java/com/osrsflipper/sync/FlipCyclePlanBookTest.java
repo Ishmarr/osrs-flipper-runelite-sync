@@ -189,6 +189,73 @@ public class FlipCyclePlanBookTest
     }
 
     @Test
+    public void higherWikiInstabuyRaisesOnlySellAndNeverRewritesTheFrozenPlan()
+    {
+        int itemId = 21622;
+        FlipCyclePlanBook book = new FlipCyclePlanBook();
+        book.recordBuy(
+            "buy-sea-turtle", "buy-sea-turtle", 1, itemId, "Sea turtle",
+            939, 1_002, 958, 5_223, 5_223, "completed", 100, 100);
+
+        int raisedCandidate = SellTargetPriceResolver.liveWikiRaiseCandidate(
+            new MarketPriceView(itemId, 1_014, 990, 200, 190, 201),
+            null);
+        assertTrue(book.raiseSellTarget(itemId, raisedCandidate));
+
+        FlipCyclePlanBook.Cycle raised = book.cycle("buy-sea-turtle");
+        assertEquals(939, raised.frozenBuyPrice);
+        assertEquals(1_013, raised.sellTargetPrice);
+        assertEquals(958, raised.lowestSellPrice);
+
+        int lowerCandidate = SellTargetPriceResolver.liveWikiRaiseCandidate(
+            new MarketPriceView(itemId, 995, 980, 210, 200, 211),
+            null);
+        assertFalse(book.raiseSellTarget(itemId, lowerCandidate));
+        FlipCyclePlanBook.Cycle afterDrop = book.cycle("buy-sea-turtle");
+        assertEquals(939, afterDrop.frozenBuyPrice);
+        assertEquals(1_013, afterDrop.sellTargetPrice);
+        assertEquals(958, afterDrop.lowestSellPrice);
+
+        book.recordSell(
+            "buy-sea-turtle", "sell-sea-turtle", 2, itemId, "Sea turtle",
+            939, 1_013, 958, 5_223, 5_223, "completed", 300, 300);
+        assertFalse(book.raiseSellTarget(itemId, 1_029));
+        assertEquals(1_013, book.cycle("buy-sea-turtle").sellTargetPrice);
+    }
+
+    @Test
+    public void linkedServerTargetOnlyRaisesItsOwnOpenCycle()
+    {
+        FlipCyclePlanBook book = new FlipCyclePlanBook();
+        book.recordBuy(
+            "older-buy", "older-buy", 1, 21622, "Sea turtle",
+            939, 1_002, 958, 10, 10, "completed", 100, 100);
+        book.recordBuy(
+            "newer-buy", "newer-buy", 2, 21622, "Sea turtle",
+            940, 1_005, 959, 10, 10, "completed", 200, 200);
+
+        assertTrue(book.raiseSellTarget("older-buy", 1_020));
+        assertEquals(1_020, book.cycle("older-buy").sellTargetPrice);
+        assertEquals(1_005, book.cycle("newer-buy").sellTargetPrice);
+    }
+
+    @Test
+    public void linkedServerTargetCannotRewriteAClosedCycle()
+    {
+        FlipCyclePlanBook book = new FlipCyclePlanBook();
+        book.recordBuy(
+            "closed-buy", "closed-buy", 1, 21622, "Sea turtle",
+            939, 1_002, 958, 10, 10, "completed", 100, 100);
+        book.recordSell(
+            "closed-buy", "closed-sell", 2, 21622, "Sea turtle",
+            939, 1_002, 958, 10, 10, "completed", 200, 200);
+
+        assertTrue(book.cycle("closed-buy").isClosed());
+        assertFalse(book.raiseSellTarget("closed-buy", 1_020));
+        assertEquals(1_002, book.cycle("closed-buy").sellTargetPrice);
+    }
+
+    @Test
     public void restoredEmptyGapRequestsAMissingSellTarget()
     {
         FlipCyclePlanBook original = new FlipCyclePlanBook();

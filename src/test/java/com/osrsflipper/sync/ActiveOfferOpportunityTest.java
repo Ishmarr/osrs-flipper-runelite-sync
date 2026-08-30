@@ -72,26 +72,35 @@ public class ActiveOfferOpportunityTest
     }
 
     @Test
-    public void activeBuyShowsChangingWikiPricesWithoutMovingFrozenGuidance()
+    public void activeBuyKeepsBuyAndLowestFrozenWhileStoredSellTargetRises()
     {
+        FlipperOfferView initial = new FlipperOfferView(
+            1, 21163, "Sea turtle", "buy", 939,
+            5_223, 5_223, "completed", 10, 10,
+            939, 1_002, 1_003, 990, 958);
+        FlipperOfferView raised = new FlipperOfferView(
+            1, 21163, "Sea turtle", "buy", 939,
+            5_223, 5_223, "completed", 10, 10,
+            939, 1_013, 1_014, 990, 958);
         RuneliteOverviewView.Opportunity first =
             OsrsFlipperSyncPanel.activeOfferOpportunity(
                 21163,
                 "buy",
-                java.util.Collections.singletonList(
-                    offer(1, "buy", 292_362, 302_073, 292_361)));
+                java.util.Collections.singletonList(initial));
         RuneliteOverviewView.Opportunity refreshed =
             OsrsFlipperSyncPanel.activeOfferOpportunity(
                 21163,
                 "buy",
-                java.util.Collections.singletonList(
-                    offer(1, "buy", 292_362, 300_169, 296_549)));
+                java.util.Collections.singletonList(raised));
 
-        assertEquals(292_362, first.buyPrice);
+        assertEquals(939, first.buyPrice);
         assertEquals(first.buyPrice, refreshed.buyPrice);
-        assertEquals(first.sellPrice, refreshed.sellPrice);
-        assertEquals(300_169, refreshed.instantBuy);
-        assertEquals(296_549, refreshed.instantSell);
+        assertEquals(1_002, first.sellPrice);
+        assertEquals(1_013, refreshed.sellPrice);
+        assertEquals(first.lowestSellPrice, refreshed.lowestSellPrice);
+        assertEquals(958, refreshed.lowestSellPrice);
+        assertEquals(1_014, refreshed.instantBuy);
+        assertEquals(990, refreshed.instantSell);
     }
 
     @Test

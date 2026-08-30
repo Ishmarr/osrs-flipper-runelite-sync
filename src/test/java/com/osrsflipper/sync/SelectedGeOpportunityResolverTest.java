@@ -102,9 +102,9 @@ public class SelectedGeOpportunityResolverTest
     }
 
     @Test
-    public void liveWikiRefreshDoesNotMoveAnExistingOffersFrozenPlan()
+    public void lowerWikiRefreshKeepsTheRaisedSellTargetAndFrozenBuyFloor()
     {
-        FlipperOfferView active = activeBuy(934, 1_244, 1_293, 934, 953);
+        FlipperOfferView active = activeBuy(934, 1_292, 1_293, 934, 953);
         SelectedGeOpportunityResolver.Resolution first =
             SelectedGeOpportunityResolver.resolve(
                 FocusedGeItemResolver.EditorContext.EXISTING_OFFER,
@@ -130,7 +130,7 @@ public class SelectedGeOpportunityResolverTest
         assertEquals(1_245, refreshed.opportunity.instantBuy);
         assertEquals(934, refreshed.opportunity.instantSell);
         assertEquals(934, refreshed.opportunity.buyPrice);
-        assertEquals(1_244, refreshed.opportunity.sellPrice);
+        assertEquals(1_292, refreshed.opportunity.sellPrice);
         assertEquals(953, refreshed.opportunity.lowestSellPrice);
     }
 

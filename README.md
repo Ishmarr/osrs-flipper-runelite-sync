@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.21
+# OSRS Flipper Sync v5.2.22
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.22
+
+- `Last buy price - 1 GP` blijft het oorspronkelijke verkoopdoel, maar een hogere actuele Wiki instabuy mag `Verkoop` tijdens dezelfde flip verhogen naar `Wiki instabuy - 1 GP`.
+- Na de start kan een latere `Last buy price` de lopende flip niet meer herschrijven; uitsluitend `Wiki instabuy - 1 GP` is dan nog een automatische verhogingskandidaat.
+- `Verkoop` is raise-only: een gelijke of lagere Wiki instabuy en een latere marktdaling kunnen het vastgelegde doel nooit verlagen.
+- Slotweergave, bewaarde flipcyclus en accountsynchronisatie houden hetzelfde hoogste verkoopdoel vast. `Koop` en `Lowest price` blijven bevroren en gesloten cycli worden niet aangepast.
 
 ## 5.2.21
 
