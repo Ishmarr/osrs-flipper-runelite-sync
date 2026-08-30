@@ -1,6 +1,8 @@
 package com.osrsflipper.sync;
 
 import com.google.gson.Gson;
+import java.util.Collections;
+import java.util.Map;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -266,6 +268,85 @@ public class FlipCyclePlanBookTest
         assertEquals(200, book.cycle("buy-1").lastAcquiredAt);
     }
 
+    @Test
+    public void authoritativeTombstoneRemovesOnlyCyclesOlderThanItsCutoff()
+    {
+        FlipCyclePlanBook book = new FlipCyclePlanBook();
+        observeBuy(book, "older-buy", "older-buy", 10, 100);
+        observeBuyGeneration(book, "newer-buy", "newer-buy", 10, 500);
+        book.recordBuy(
+            "other-item", "other-item", 3, 4151, "Abyssal whip",
+            1_000, 1_100, 1_020, 10, 10, "completed", 600, 600);
+
+        assertEquals(1, book.expireOpenCycles(3004, 500));
+        assertNull(book.cycle("older-buy"));
+        assertNotNull(book.cycle("newer-buy"));
+        assertNotNull(book.cycle("other-item"));
+    }
+
+    @Test
+    public void delayedFirstTombstoneCannotDeleteANewerWikiCycle()
+    {
+        LastTradePriceBook prices = new LastTradePriceBook();
+        prices.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(3004, 7_889, 7_630, 100, 101)));
+        FlipCyclePlanBook cycles = new FlipCyclePlanBook();
+        observeBuy(cycles, "expired-buy", "expired-buy", 10, 100);
+        observeBuyGeneration(cycles, "new-wiki-buy", "new-wiki-buy", 10, 600);
+
+        Map<Integer, Long> delayedClear = prices.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(3004, 0, 0, 0, 0, 500)));
+        for (Map.Entry<Integer, Long> cleared : delayedClear.entrySet())
+        {
+            cycles.expireOpenCycles(cleared.getKey(), cleared.getValue());
+        }
+
+        assertEquals(Long.valueOf(500), delayedClear.get(3004));
+        assertNull(cycles.cycle("expired-buy"));
+        assertNotNull(cycles.cycle("new-wiki-buy"));
+    }
+
+    @Test
+    public void repeatedOldTombstoneCannotDeleteANewerWikiCycle()
+    {
+        LastTradePriceBook prices = new LastTradePriceBook();
+        prices.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(3004, 7_889, 7_630, 100, 101)));
+        FlipCyclePlanBook cycles = new FlipCyclePlanBook();
+        observeBuy(cycles, "expired-buy", "expired-buy", 10, 100);
+
+        Map<Integer, Long> firstClear = prices.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(3004, 0, 0, 0, 0, 500)));
+        for (Map.Entry<Integer, Long> cleared : firstClear.entrySet())
+        {
+            cycles.expireOpenCycles(cleared.getKey(), cleared.getValue());
+        }
+        assertNull(cycles.cycle("expired-buy"));
+
+        observeBuyGeneration(cycles, "new-wiki-buy", "new-wiki-buy", 10, 600);
+        Map<Integer, Long> repeatedClear = prices.mergeAuthoritative(Collections.singletonList(
+            new LastTradePriceView(3004, 0, 0, 0, 0, 500)));
+        for (Map.Entry<Integer, Long> cleared : repeatedClear.entrySet())
+        {
+            cycles.expireOpenCycles(cleared.getKey(), cleared.getValue());
+        }
+
+        assertTrue(repeatedClear.isEmpty());
+        assertNotNull(cycles.cycle("new-wiki-buy"));
+    }
+
+    @Test
+    public void authoritativeExpiryLeavesAlreadyClosedHistoryAlone()
+    {
+        FlipCyclePlanBook book = new FlipCyclePlanBook();
+        observeBuy(book, "closed-buy", "closed-buy", 10, 100);
+        recordCompletedSell(book, "closed-buy", "closed-sell", 10, 200);
+
+        assertEquals(0, book.expireOpenCycles(3004, 500));
+        assertNotNull(book.cycle("closed-buy"));
+        assertTrue(book.cycle("closed-buy").isClosed());
+    }
+
     private static void observeBuy(
         FlipCyclePlanBook book,
         String cycleId,
@@ -286,6 +367,29 @@ public class FlipCyclePlanBookTest
             filledQuantity,
             "completed",
             100,
+            eventAt);
+    }
+
+    private static void observeBuyGeneration(
+        FlipCyclePlanBook book,
+        String cycleId,
+        String offerId,
+        int filledQuantity,
+        long eventAt)
+    {
+        book.recordBuy(
+            cycleId,
+            offerId,
+            1,
+            3004,
+            "Snapdragon potion (unf)",
+            7_631,
+            7_888,
+            7_786,
+            Math.max(1, filledQuantity),
+            filledQuantity,
+            "completed",
+            eventAt,
             eventAt);
     }
 

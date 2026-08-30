@@ -1,6 +1,15 @@
-# OSRS Flipper Sync v5.2.20
+# OSRS Flipper Sync v5.2.21
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.21
+
+- Een item blijft persoonlijk prijsadvies gebruiken zolang het in minstens één GE-slot zichtbaar is, ook wanneer het offer voltooid of geannuleerd is.
+- Zodra het item 300 seconden onafgebroken uit alle GE-slots verdwenen is, vraagt RuneLite onmiddellijk een gezaghebbende controle aan de Worker; korte collect-, slotwissel- en repricinggaten resetten de prijsbron niet.
+- De afwezigheidsdeadline blijft per account en item bewaard bij een herstart. RuneLite wist zelf geen prijzen wanneer de Worker onbereikbaar is.
+- Na een nieuwe Worker-tombstone verdwijnen alleen open flipplannen die aantoonbaar ouder zijn dan de reset. Een vertraagde response kan een inmiddels nieuw gestarte Wiki-cyclus dus niet verwijderen.
+- Overviewresponses zijn aan zowel account als requestgeneratie gebonden; een vertraagde response van een vorig account kan de huidige lokale boeken niet wijzigen.
+- RuneLite stuurt de lokaal gevolgde prijs- en cyclusitems mee, zodat hun tombstone ook buiten de algemene serverlimiet altijd wordt teruggeleverd.
 
 ## 5.2.20
 

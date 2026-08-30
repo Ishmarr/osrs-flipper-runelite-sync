@@ -78,7 +78,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.20";
+    private static final String PLUGIN_VERSION = "5.2.21";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -100,8 +100,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final String SNAPSHOT_SEQUENCE_PREFIX = "snapshotSequence_";
     private static final String PENDING_SNAPSHOT_PREFIX = "pendingSnapshot_";
     private static final String LAST_TRADE_PRICES_PREFIX = "lastTradePrices_";
+    private static final String GE_ITEM_PRESENCE_PREFIX = "geItemPresence_";
     private static final String FLIP_CYCLES_PREFIX = "flipCycles_";
     private static final int SLOT_COUNT = 8;
+    private static final int MAX_TRACKED_OVERVIEW_ITEMS = 640;
     private static final int LOGIN_RECONCILE_TICKS = 8;
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
     private static final int HEARTBEAT_GAME_TICKS = 100;
@@ -152,6 +154,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
     private final SessionStatsTracker sessionStats = new SessionStatsTracker();
     private final LastTradePriceBook lastTradePrices = new LastTradePriceBook();
+    private final GeItemPresenceBook geItemPresence = new GeItemPresenceBook();
     private final FlipCyclePlanBook flipCycles = new FlipCyclePlanBook();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
 
@@ -188,6 +191,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private PendingSnapshot pendingSnapshot;
     private boolean marketPriceInFlight;
     private boolean overviewInFlight;
+    private long overviewRequestGeneration;
+    private long overviewContextGeneration;
     private boolean cashInFlight;
     private boolean overviewRefreshPending;
     private boolean overviewFreshMarketPending;
@@ -234,7 +239,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         fullSnapshotTicks = 0;
         marketPriceTicks = MARKET_PRICE_GAME_TICKS;
         marketPriceInFlight = false;
-        overviewInFlight = false;
+        invalidateOverviewContext();
         cashInFlight = false;
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
@@ -254,6 +259,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         queuedMarketPriceItems.clear();
         sessionStats.reset();
         lastTradePrices.clear();
+        geItemPresence.clear();
         loginReconciliationPending = client.getGameState() == GameState.LOGGED_IN;
         geOpenReconciliationPending = false;
         loggedInTicks = 0;
@@ -306,12 +312,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerBackoffUntil = 0;
         slotSnapshots.clear();
         flipCycles.clear();
+        geItemPresence.clear();
         outbox.clear();
         marketPrices.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         marketPriceInFlight = false;
-        overviewInFlight = false;
+        invalidateOverviewContext();
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
         overviewTicks = 0;
@@ -430,7 +437,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             requestOverview(true);
         }
 
-        requestExpiredPriceTestRefresh();
+        observePriceTestItemPresence();
 
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
@@ -511,6 +518,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         if ("webappAddress".equals(event.getKey()))
         {
+            // Responses van het vorige endpoint horen niet bij de nieuwe
+            // verbinding, ook niet wanneer account en requestnummer toevallig
+            // nog overeenkomen.
+            invalidateOverviewContext();
             if (endpoint(STATUS_PATH) == null)
             {
                 setConnectionStatus("Ongeldig webapp-adres; gebruik HTTPS");
@@ -724,6 +735,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 return;
             }
 
+            // Een eventueel nog lopende overview gebruikte de vorige token.
+            // Laat die response nooit in de nieuwe koppeling terechtkomen.
+            invalidateOverviewContext();
             setStoredValue("deviceToken", pair.device_token);
             setStoredValue("deviceId", pair.device_id);
             setStoredValue("ownerEmail", trim(pair.owner_email).toLowerCase());
@@ -1971,7 +1985,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean anyWorkerRequestInFlight()
     {
         return pairingInFlight || statusInFlight || heartbeatInFlight || requestInFlight ||
-            snapshotInFlight || slotStateInFlight || cashInFlight;
+            snapshotInFlight || slotStateInFlight || cashInFlight || overviewInFlight;
     }
 
     private long scheduleTransientRetry(int attempts)
@@ -2039,11 +2053,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         activeAccountHash = accountHash;
         sessionStats.reset();
         lastTradePrices.clear();
+        geItemPresence.clear();
         marketPrices.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         overview = RuneliteOverviewView.empty();
-        overviewInFlight = false;
+        invalidateOverviewContext();
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
         overviewTicks = OVERVIEW_GAME_TICKS;
@@ -2114,6 +2129,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 : gson.fromJson(lastTradePricesJson, LastTradePriceBook.Entry[].class);
             lastTradePrices.restore(lastTradeEntries);
 
+            String itemPresenceJson = configManager.getConfiguration(
+                OsrsFlipperSyncConfig.GROUP, GE_ITEM_PRESENCE_PREFIX + accountKey());
+            GeItemPresenceBook.Entry[] itemPresenceEntries = isBlank(itemPresenceJson)
+                ? null
+                : gson.fromJson(itemPresenceJson, GeItemPresenceBook.Entry[].class);
+            geItemPresence.restore(itemPresenceEntries);
+
             String flipCyclesJson = configManager.getConfiguration(
                 OsrsFlipperSyncConfig.GROUP, FLIP_CYCLES_PREFIX + accountKey());
             FlipCyclePlanBook.Cycle[] persistedCycles = isBlank(flipCyclesJson)
@@ -2129,6 +2151,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             flipCycles.clear();
             outbox.clear();
             lastTradePrices.clear();
+            geItemPresence.clear();
         }
     }
 
@@ -2163,12 +2186,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             gson.toJson(lastTradePrices.persistedEntries()));
         configManager.setConfiguration(
             OsrsFlipperSyncConfig.GROUP,
+            GE_ITEM_PRESENCE_PREFIX + accountKey(),
+            gson.toJson(geItemPresence.persistedEntries()));
+        configManager.setConfiguration(
+            OsrsFlipperSyncConfig.GROUP,
             FLIP_CYCLES_PREFIX + accountKey(),
             gson.toJson(flipCycles.persistedCycles()));
     }
 
     private void clearStoredPairing(String status)
     {
+        invalidateOverviewContext();
         setStoredValue("deviceToken", "");
         setStoredValue("deviceId", "");
         setStoredValue("ownerEmail", "");
@@ -2191,6 +2219,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerBackoffUntil = 0;
         setConnectionStatus(status);
         LOG.warn("RuneLite-apparaatkoppeling is niet langer geldig");
+    }
+
+    private void invalidateOverviewContext()
+    {
+        overviewContextGeneration++;
+        overviewRequestGeneration++;
+        overviewInFlight = false;
+        overviewRefreshPending = false;
+        overviewFreshMarketPending = false;
     }
 
     private void setConnectionStatus(String value)
@@ -2240,34 +2277,87 @@ public class OsrsFlipperSyncPlugin extends Plugin
         refreshSidePanel();
     }
 
-    private void requestExpiredPriceTestRefresh()
+    private void observePriceTestItemPresence()
     {
-        if (!hasDeviceToken())
-        {
-            return;
-        }
-        Set<Integer> protectedItemIds = new HashSet<>();
-        for (SlotSnapshot snapshot : slotSnapshots.values())
-        {
-            if (snapshot != null && snapshot.itemId > 0 && LastTradePriceBook.isOpenOffer(
-                snapshot.side,
-                snapshot.totalQuantity,
-                snapshot.status))
-            {
-                protectedItemIds.add(snapshot.itemId);
-            }
-        }
-        if (!lastTradePrices.markAuthoritativeExpiryRefreshDue(now(), protectedItemIds))
+        if (activeAccountHash == NO_ACCOUNT)
         {
             return;
         }
 
-        // Alleen de Worker kan accountbreed vaststellen dat op geen enkele pc
-        // nog een flip openstaat. RuneLite vraagt daarom op de vervaldatum
-        // meteen diens authoritatieve prijstest/tombstone op en wist nooit op
-        // basis van uitsluitend de lokale GE-slots.
-        persistCurrentAccount();
+        long observedAt = now();
+        boolean changed = geItemPresence.observe(
+            observedAt,
+            occupiedGeItemIds(),
+            trackedGuidanceItemIds());
+        boolean refreshDue = hasDeviceToken() &&
+            geItemPresence.markAuthoritativeRefreshDue(observedAt);
+        if (changed || refreshDue)
+        {
+            persistCurrentAccount();
+        }
+        if (!refreshDue)
+        {
+            return;
+        }
+
+        // De lokale waarneming start alleen de controle. De Worker combineert
+        // alle accountslots en is de enige bron die de prijstest met een
+        // tombstone mag wissen. Bij netwerkuitval blijven de lokale prijzen dus
+        // behouden en volgt iedere minuut een nieuwe controlepoging.
         requestOverview(true);
+    }
+
+    private Set<Integer> occupiedGeItemIds()
+    {
+        Set<Integer> itemIds = new HashSet<>();
+        GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+        if (offers == null)
+        {
+            return itemIds;
+        }
+        for (GrandExchangeOffer offer : offers)
+        {
+            if (offer != null && isOccupiedGeOffer(offer.getItemId(), offer.getState()))
+            {
+                itemIds.add(offer.getItemId());
+            }
+        }
+        return itemIds;
+    }
+
+    private Set<Integer> trackedGuidanceItemIds()
+    {
+        return trackedGuidanceItemIds(
+            lastTradePrices.snapshot(),
+            flipCycles.openItemIds());
+    }
+
+    static Set<Integer> trackedGuidanceItemIds(
+        Map<Integer, LastTradePriceView> personalPrices,
+        Set<Integer> openCycleItemIds)
+    {
+        Set<Integer> itemIds = new HashSet<>();
+        if (personalPrices != null)
+        {
+            for (Map.Entry<Integer, LastTradePriceView> price : personalPrices.entrySet())
+            {
+                LastTradePriceView value = price.getValue();
+                if (value != null && (value.lastBuyPrice > 0 || value.lastSellPrice > 0))
+                {
+                    itemIds.add(price.getKey());
+                }
+            }
+        }
+        if (openCycleItemIds != null)
+        {
+            itemIds.addAll(openCycleItemIds);
+        }
+        return itemIds;
+    }
+
+    static boolean isOccupiedGeOffer(int itemId, GrandExchangeOfferState state)
+    {
+        return itemId > 0 && state != null && state != GrandExchangeOfferState.EMPTY;
     }
 
     private void requestOverview(boolean force)
@@ -2282,7 +2372,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void requestOverview(boolean force, boolean freshMarket)
     {
-        if (!started || !hasDeviceToken())
+        if (!started || pairingInFlight || !hasDeviceToken())
         {
             return;
         }
@@ -2314,8 +2404,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
             dayStart,
             monthStart,
             focusedGeItemId,
-            freshMarket);
+            freshMarket,
+            trackedGuidanceItemIds());
         Request request = authorizedRequest(url).get().build();
+        long requestAccountHash = activeAccountHash;
+        long requestGeneration = ++overviewRequestGeneration;
+        long requestContextGeneration = overviewContextGeneration;
+        long requestPriceRevision = lastTradePrices.revision();
         overviewInFlight = true;
         overviewTicks = 0;
         httpClient.newCall(request).enqueue(new Callback()
@@ -2326,7 +2421,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 clientThread.invokeLater(() ->
                 {
                     debug("RuneLite-kansen konden niet worden opgehaald: {}", exception.getMessage());
-                    finishOverviewRequest();
+                    finishOverviewRequest(
+                        requestAccountHash,
+                        requestGeneration,
+                        requestContextGeneration);
                 });
             }
 
@@ -2336,13 +2434,37 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 String body = readResponseBody(response);
                 int statusCode = response.code();
                 response.close();
-                clientThread.invokeLater(() -> handleOverviewResponse(statusCode, body));
+                clientThread.invokeLater(() -> handleOverviewResponse(
+                    statusCode,
+                    body,
+                    requestAccountHash,
+                    requestGeneration,
+                    requestContextGeneration,
+                    requestPriceRevision));
             }
         });
     }
 
-    private void handleOverviewResponse(int statusCode, String body)
+    private void handleOverviewResponse(
+        int statusCode,
+        String body,
+        long requestAccountHash,
+        long requestGeneration,
+        long requestContextGeneration,
+        long requestPriceRevision)
     {
+        if (!isCurrentOverviewRequest(
+            requestAccountHash,
+            requestGeneration,
+            requestContextGeneration,
+            activeAccountHash,
+            overviewRequestGeneration,
+            overviewContextGeneration,
+            overviewInFlight))
+        {
+            debug("Verouderde overviewrespons voor account {} genegeerd", requestAccountHash);
+            return;
+        }
         if (statusCode == 401 || statusCode == 403)
         {
             overviewInFlight = false;
@@ -2354,7 +2476,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode < 200 || statusCode >= 300)
         {
             debug("RuneLite-kansen kregen HTTP {}: {}", statusCode, abbreviate(body, 300));
-            finishOverviewRequest();
+            finishOverviewRequest(
+                requestAccountHash,
+                requestGeneration,
+                requestContextGeneration);
             return;
         }
 
@@ -2366,7 +2491,18 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 throw new IllegalArgumentException("success ontbreekt");
             }
             overview = response.toView();
-            lastTradePrices.mergeAuthoritative(overview.priceTests);
+            Map<Integer, Long> advancedPriceTombstones =
+                lastTradePrices.mergeAuthoritative(overview.priceTests, requestPriceRevision);
+            for (Map.Entry<Integer, Long> cleared : advancedPriceTombstones.entrySet())
+            {
+                flipCycles.expireOpenCycles(cleared.getKey(), cleared.getValue());
+            }
+            Set<Integer> fullyExpiredItems = new HashSet<>(advancedPriceTombstones.keySet());
+            // Een oudere tombstone mag een nieuwere lokale prijsproef/cyclus
+            // niet alleen qua prijs sparen maar ook haar oorspronkelijke
+            // afwezigheidsdeadline niet opnieuw laten beginnen.
+            fullyExpiredItems.removeAll(trackedGuidanceItemIds());
+            geItemPresence.forget(fullyExpiredItems);
             refreshOpenCycleSellTargets();
             persistCurrentAccount();
             markWorkerSuccess();
@@ -2384,12 +2520,29 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         finally
         {
-            finishOverviewRequest();
+            finishOverviewRequest(
+                requestAccountHash,
+                requestGeneration,
+                requestContextGeneration);
         }
     }
 
-    private void finishOverviewRequest()
+    private void finishOverviewRequest(
+        long requestAccountHash,
+        long requestGeneration,
+        long requestContextGeneration)
     {
+        if (!isCurrentOverviewRequest(
+            requestAccountHash,
+            requestGeneration,
+            requestContextGeneration,
+            activeAccountHash,
+            overviewRequestGeneration,
+            overviewContextGeneration,
+            overviewInFlight))
+        {
+            return;
+        }
         overviewInFlight = false;
         if (overviewRefreshPending)
         {
@@ -2400,12 +2553,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
     }
 
+    static boolean isCurrentOverviewRequest(
+        long requestAccountHash,
+        long requestGeneration,
+        long requestContextGeneration,
+        long currentAccountHash,
+        long currentGeneration,
+        long currentContextGeneration,
+        boolean inFlight)
+    {
+        return inFlight &&
+            requestAccountHash == currentAccountHash &&
+            requestGeneration == currentGeneration &&
+            requestContextGeneration == currentContextGeneration;
+    }
+
     static HttpUrl overviewUrl(
         HttpUrl base,
         long dayStart,
         long monthStart,
         int focusItemId,
-        boolean freshMarket)
+        boolean freshMarket,
+        Set<Integer> trackedItemIds)
     {
         HttpUrl.Builder url = base.newBuilder()
             .addQueryParameter("day_start", Long.toString(dayStart))
@@ -2420,6 +2589,31 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // mag de marktcache omzeilen. Periodieke requests sturen deze
             // parameter bewust niet mee.
             url.addQueryParameter("fresh_market", "1");
+        }
+        List<Integer> tracked = new ArrayList<>();
+        if (trackedItemIds != null)
+        {
+            for (Integer itemId : trackedItemIds)
+            {
+                if (itemId != null && itemId > 0)
+                {
+                    tracked.add(itemId);
+                }
+            }
+        }
+        Collections.sort(tracked);
+        if (tracked.size() > MAX_TRACKED_OVERVIEW_ITEMS)
+        {
+            tracked = new ArrayList<>(tracked.subList(0, MAX_TRACKED_OVERVIEW_ITEMS));
+        }
+        if (!tracked.isEmpty())
+        {
+            List<String> values = new ArrayList<>();
+            for (Integer itemId : tracked)
+            {
+                values.add(Integer.toString(itemId));
+            }
+            url.addQueryParameter("tracked_item_ids", String.join(",", values));
         }
         return url.build();
     }

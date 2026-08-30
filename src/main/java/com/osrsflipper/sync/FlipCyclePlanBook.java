@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -313,6 +314,31 @@ final class FlipCyclePlanBook
             changed = true;
         }
         return changed;
+    }
+
+    int expireOpenCycles(int itemId, long clearedAt)
+    {
+        if (itemId <= 0 || clearedAt <= 0)
+        {
+            return 0;
+        }
+        int removed = 0;
+        Iterator<Map.Entry<String, Cycle>> iterator = cycles.entrySet().iterator();
+        while (iterator.hasNext())
+        {
+            Cycle cycle = iterator.next().getValue();
+            // Bij gelijke seconden kan de lokale cyclus al de nieuwe generatie
+            // zijn terwijl de oudere Workerrespons nog onderweg was. Alleen
+            // aantoonbaar oudere (of legacy ongedateerde) cycli vervallen.
+            if (cycle == null || cycle.itemId != itemId || cycle.isClosed() ||
+                (cycle.startedAt > 0 && cycle.startedAt >= clearedAt))
+            {
+                continue;
+            }
+            iterator.remove();
+            removed++;
+        }
+        return removed;
     }
 
     private Cycle select(int itemId, int quantity, long sellStartedAt, boolean requireQuantity)

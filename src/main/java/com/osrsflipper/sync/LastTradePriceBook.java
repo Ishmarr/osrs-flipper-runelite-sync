@@ -5,19 +5,19 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 final class LastTradePriceBook
 {
     private static final int MAX_ITEMS = 500;
     private static final long MAX_PRICE_TEST_SECONDS = 30;
-    private static final long PUBLISHED_PRICE_TEST_TTL_SECONDS = 10 * 60;
     private static final int PRICE_TEST_FORMAT_VERSION = 1;
     private final Map<Integer, Entry> entries = new LinkedHashMap<>();
+    private long localRevision;
 
     void clear()
     {
         entries.clear();
+        localRevision++;
     }
 
     void recordTransition(
@@ -44,9 +44,11 @@ final class LastTradePriceBook
         {
             // Het actieve tegenoffer heeft nog geen fill en mag de zojuist
             // vastgelegde 1x1-aankoop niet wissen. Een echte andere fill wel.
-            if (quantity > 0)
+            if (quantity > 0 && existing != null &&
+                (existing.pendingTestBuyPrice > 0 || existing.pendingTestBuyAt > 0))
             {
                 clearPending(existing);
+                markPendingChanged(existing);
             }
             return;
         }
@@ -64,12 +66,13 @@ final class LastTradePriceBook
         entry.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
         if ("buy".equals(side))
         {
-            if (eventAt < entry.clearedAt)
+            if (eventAt < Math.max(entry.clearedAt, entry.highestAuthoritativeClearAt))
             {
                 return;
             }
             entry.pendingTestBuyPrice = unitPrice;
             entry.pendingTestBuyAt = Math.max(0, eventAt);
+            markPendingChanged(entry);
         }
         else
         {
@@ -83,10 +86,35 @@ final class LastTradePriceBook
                 entry.lastBuyAt = entry.pendingTestBuyAt;
                 entry.lastSellAt = sellAt;
                 entry.clearedAt = 0;
+                markPublishedChanged(entry);
             }
+            boolean pendingChanged = entry.pendingTestBuyPrice > 0 || entry.pendingTestBuyAt > 0;
             clearPending(entry);
+            if (pendingChanged)
+            {
+                markPendingChanged(entry);
+            }
         }
         trimOldest();
+    }
+
+    long revision()
+    {
+        return localRevision;
+    }
+
+    private void markPublishedChanged(Entry entry)
+    {
+        localRevision++;
+        entry.modifiedRevision = localRevision;
+        entry.publishedModifiedRevision = localRevision;
+    }
+
+    private void markPendingChanged(Entry entry)
+    {
+        localRevision++;
+        entry.modifiedRevision = localRevision;
+        entry.pendingModifiedRevision = localRevision;
     }
 
     private static void clearPending(Entry entry)
@@ -118,11 +146,19 @@ final class LastTradePriceBook
                 entry.pendingTestBuyPrice = Math.max(0, entry.pendingTestBuyPrice);
                 entry.pendingTestBuyAt = Math.max(0, entry.pendingTestBuyAt);
                 entry.clearedAt = Math.max(0, entry.clearedAt);
-                entry.expiryRefreshForAt = Math.max(0, entry.expiryRefreshForAt);
+                entry.highestAuthoritativeClearAt = Math.max(
+                    Math.max(0, entry.highestAuthoritativeClearAt),
+                    entry.clearedAt);
+                entry.modifiedRevision = 0;
+                entry.publishedModifiedRevision = 0;
+                entry.pendingModifiedRevision = 0;
                 if (entry.clearedAt > 0 && entry.clearedAt >= latestPriceTestAt(entry))
                 {
                     clearPublished(entry);
-                    if (entry.pendingTestBuyAt <= entry.clearedAt)
+                    // Een lokale buy die in exact dezelfde epochseconde als
+                    // de tombstone begon, is de nieuwe generatie. Dit moet
+                    // na een herstart hetzelfde blijven als tijdens runtime.
+                    if (entry.pendingTestBuyAt < entry.clearedAt)
                     {
                         clearPending(entry);
                     }
@@ -131,36 +167,6 @@ final class LastTradePriceBook
             }
         }
         trimOldest();
-    }
-
-    boolean markAuthoritativeExpiryRefreshDue(long now, Set<Integer> protectedItemIds)
-    {
-        boolean refreshDue = false;
-        for (Entry entry : entries.values())
-        {
-            long publishedAt = latestPriceTestAt(entry);
-            if (publishedAt <= 0 || entry.lastBuyPrice <= 0 || entry.lastSellPrice <= 0 ||
-                (entry.clearedAt > 0 && entry.clearedAt >= publishedAt) ||
-                (protectedItemIds != null && protectedItemIds.contains(entry.itemId)) ||
-                now < publishedAt || now - publishedAt < PUBLISHED_PRICE_TEST_TTL_SECONDS ||
-                // Dit onderdrukt alleen de extra controle op de 10-minutengrens.
-                // Periodieke en GE-gestuurde overviews blijven gewoon doorlopen.
-                entry.expiryRefreshForAt >= publishedAt)
-            {
-                continue;
-            }
-            entry.expiryRefreshForAt = publishedAt;
-            refreshDue = true;
-        }
-        return refreshDue;
-    }
-
-    static boolean isOpenOffer(String side, int totalQuantity, String status)
-    {
-        return totalQuantity > 0 &&
-            ("buy".equals(side) || "sell".equals(side)) &&
-            ("pending".equals(status) || "active".equals(status) ||
-                "partially_filled".equals(status));
     }
 
     Map<Integer, LastTradePriceView> snapshot()
@@ -183,11 +189,19 @@ final class LastTradePriceBook
         return result;
     }
 
-    void mergeAuthoritative(Iterable<LastTradePriceView> serverEntries)
+    Map<Integer, Long> mergeAuthoritative(Iterable<LastTradePriceView> serverEntries)
     {
+        return mergeAuthoritative(serverEntries, Long.MAX_VALUE);
+    }
+
+    Map<Integer, Long> mergeAuthoritative(
+        Iterable<LastTradePriceView> serverEntries,
+        long requestLocalRevision)
+    {
+        Map<Integer, Long> advancedTombstones = new LinkedHashMap<>();
         if (serverEntries == null)
         {
-            return;
+            return advancedTombstones;
         }
         for (LastTradePriceView server : serverEntries)
         {
@@ -201,28 +215,75 @@ final class LastTradePriceBook
             Entry merged = local == null ? new Entry() : local;
             merged.itemId = server.itemId;
             merged.priceTestVersion = PRICE_TEST_FORMAT_VERSION;
-            if (server.clearedAt > 0 && server.clearedAt >= serverPriceAt)
+            boolean authoritativeTombstone = server.clearedAt > 0 &&
+                server.lastBuyPrice <= 0 && server.lastSellPrice <= 0 &&
+                server.clearedAt >= serverPriceAt;
+            if (authoritativeTombstone)
             {
-                if (latestPriceTestAt(merged) <= server.clearedAt)
+                boolean authoritativeClearAdvanced =
+                    server.clearedAt > merged.highestAuthoritativeClearAt;
+                if (!authoritativeClearAdvanced)
+                {
+                    // Een positieve generatie kan dezelfde serverseconde als
+                    // haar voorganger-tombstone dragen. Onthoud daarom los van
+                    // de zichtbare clear welke tombstones al verwerkt zijn;
+                    // een stale cache mag die generatie niet opnieuw wissen.
+                    continue;
+                }
+                long localPriceAt = latestPriceTestAt(merged);
+                long localPendingAt = Math.max(0, merged.pendingTestBuyAt);
+                boolean publishedChangedAfterRequest =
+                    merged.publishedModifiedRevision > requestLocalRevision;
+                boolean pendingChangedAfterRequest =
+                    merged.pendingModifiedRevision > requestLocalRevision;
+                boolean publishedClearAccepted = !publishedChangedAfterRequest &&
+                    localPriceAt <= server.clearedAt;
+                if (publishedClearAccepted)
                 {
                     clearPublished(merged);
                 }
-                if (merged.pendingTestBuyAt < server.clearedAt)
+                if (!pendingChangedAfterRequest &&
+                    localPendingAt > 0 && localPendingAt < server.clearedAt)
                 {
                     clearPending(merged);
                 }
-                merged.clearedAt = Math.max(merged.clearedAt, server.clearedAt);
+                boolean protectedPublishedWouldBeHidden = publishedChangedAfterRequest &&
+                    localPriceAt > 0 && localPriceAt <= server.clearedAt;
+                boolean protectedPendingWouldBeLostOnRestore = pendingChangedAfterRequest &&
+                    localPendingAt > 0 && localPendingAt < server.clearedAt;
+                if (!protectedPublishedWouldBeHidden && !protectedPendingWouldBeLostOnRestore)
+                {
+                    merged.clearedAt = Math.max(merged.clearedAt, server.clearedAt);
+                }
+                merged.highestAuthoritativeClearAt = server.clearedAt;
                 entries.put(server.itemId, merged);
+                // Rapporteer elke nieuw waargenomen tombstone ook wanneer een
+                // nieuwere lokale prijsmeting terecht blijft bestaan. De
+                // caller gebruikt clearedAt als bovengrens en kan daardoor
+                // oude flipcycli opruimen zonder de nieuwe generatie te raken.
+                advancedTombstones.put(server.itemId, server.clearedAt);
                 continue;
             }
             long localAt = local == null ? 0 : Math.max(
                 Math.max(latestPriceTestAt(local), local.pendingTestBuyAt),
                 local.clearedAt);
-            if (local != null && localAt > 0 && localAt >= serverAt)
+            if (server.lastBuyPrice <= 0 || server.lastSellPrice <= 0 ||
+                (server.clearedAt > 0 && server.clearedAt > serverPriceAt))
             {
                 continue;
             }
-            if (server.lastBuyPrice <= 0 || server.lastSellPrice <= 0)
+            merged.highestAuthoritativeClearAt = Math.max(
+                merged.highestAuthoritativeClearAt,
+                server.clearedAt);
+            // Een positieve response is een snapshot van het requestmoment.
+            // Een lokale prijstest die daarna wijzigde wint daarom altijd,
+            // ook wanneer beide generaties dezelfde epochseconde dragen.
+            if (local != null && local.modifiedRevision > requestLocalRevision)
+            {
+                entries.put(server.itemId, merged);
+                continue;
+            }
+            if (local != null && localAt > 0 && localAt > serverAt)
             {
                 continue;
             }
@@ -230,11 +291,15 @@ final class LastTradePriceBook
             merged.lastSellPrice = server.lastSellPrice;
             merged.lastBuyAt = server.lastBuyAt;
             merged.lastSellAt = server.lastSellAt;
-            merged.clearedAt = server.clearedAt;
+            // Een positieve authoritatieve generatie vervangt de historische
+            // tombstone, ook wanneer beide servermomenten in dezelfde seconde
+            // vallen. De Worker gebruikt de hogere flip-id als tie-breaker.
+            merged.clearedAt = 0;
             clearPending(merged);
             entries.put(server.itemId, merged);
         }
         trimOldest();
+        return advancedTombstones;
     }
 
     List<Entry> persistedEntries()
@@ -249,7 +314,9 @@ final class LastTradePriceBook
             Integer oldest = entries.values().stream()
                 .min(Comparator.comparingLong(entry -> Math.max(
                     Math.max(entry.lastBuyAt, entry.lastSellAt),
-                    Math.max(entry.pendingTestBuyAt, entry.clearedAt))))
+                    Math.max(
+                        entry.pendingTestBuyAt,
+                        Math.max(entry.clearedAt, entry.highestAuthoritativeClearAt)))))
                 .map(entry -> entry.itemId)
                 .orElse(null);
             if (oldest == null)
@@ -288,6 +355,9 @@ final class LastTradePriceBook
         int pendingTestBuyPrice;
         long pendingTestBuyAt;
         long clearedAt;
-        long expiryRefreshForAt;
+        long highestAuthoritativeClearAt;
+        transient long modifiedRevision;
+        transient long publishedModifiedRevision;
+        transient long pendingModifiedRevision;
     }
 }
