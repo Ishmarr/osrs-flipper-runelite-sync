@@ -159,7 +159,7 @@ final class GeSlotTimerOverlay extends Overlay
 
     static Font timerFont(Font baseFont)
     {
-        float timerSize = Math.max(MIN_TIMER_FONT_SIZE, baseFont.getSize2D() - 1.0F);
+        float timerSize = Math.max(MIN_TIMER_FONT_SIZE, baseFont.getSize2D() - 2.0F);
         return baseFont.deriveFont(timerSize);
     }
 

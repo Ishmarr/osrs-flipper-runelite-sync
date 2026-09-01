@@ -29,7 +29,7 @@ public class GeSlotTimerOverlayTest
     }
 
     @Test
-    public void derivesTimerFontOnePointSmallerWithSafeMinimum()
+    public void derivesTimerFontTwoPointsSmallerWithSafeMinimum()
     {
         Font base = new Font(Font.DIALOG, Font.BOLD, 12);
         Font smaller = GeSlotTimerOverlay.timerFont(base);
@@ -37,7 +37,7 @@ public class GeSlotTimerOverlayTest
 
         assertEquals(base.getFamily(), smaller.getFamily());
         assertEquals(base.getStyle(), smaller.getStyle());
-        assertEquals(11.0F, smaller.getSize2D(), 0.0F);
+        assertEquals(10.0F, smaller.getSize2D(), 0.0F);
         assertEquals(6.0F, minimum.getSize2D(), 0.0F);
     }
 
