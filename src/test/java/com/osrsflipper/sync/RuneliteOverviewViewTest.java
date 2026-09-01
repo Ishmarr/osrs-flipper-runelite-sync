@@ -7,6 +7,7 @@ import java.util.List;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
@@ -64,6 +65,46 @@ public class RuneliteOverviewViewTest
 
         assertEquals(20, view.maximumQuantityForItem(202));
         assertEquals(0, view.maximumQuantityForItem(303));
+    }
+
+    @Test
+    public void quantityEditorAlsoHonoursTheRemainingOfficialBuyLimit()
+    {
+        RuneliteOverviewView.Opportunity opportunity = limitedOpportunity(
+            202, 250, 100, 70, 30);
+        RuneliteOverviewView view = new RuneliteOverviewView(
+            Collections.emptyList(),
+            Collections.singletonList(opportunity),
+            null,
+            null,
+            null,
+            1234);
+
+        assertEquals(100, opportunity.officialBuyLimit);
+        assertEquals(70, opportunity.usedBuyLimit);
+        assertEquals(30, opportunity.remainingBuyLimit);
+        assertEquals(30, opportunity.effectiveMaximumQuantity());
+        assertEquals(30, view.maximumQuantityForItem(202));
+    }
+
+    @Test
+    public void buyLimitCannotBeRaisedByAnInconsistentRemainingValue()
+    {
+        RuneliteOverviewView.Opportunity opportunity = limitedOpportunity(
+            202, 250, 100, 70, 80);
+
+        assertEquals(30, opportunity.remainingBuyLimit);
+        assertEquals(30, opportunity.effectiveMaximumQuantity());
+    }
+
+    @Test
+    public void legacyAndActiveOfferRowsWithoutBuyLimitFieldsRemainUnchanged()
+    {
+        RuneliteOverviewView.Opportunity legacy = opportunity(202, 2_250, 2_500);
+
+        assertFalse(legacy.hasBuyLimit());
+        assertEquals(20, legacy.maximumQuantity);
+        assertEquals(20, legacy.effectiveMaximumQuantity());
     }
 
     @Test
@@ -141,5 +182,31 @@ public class RuneliteOverviewViewTest
             200_000,
             50_000,
             1234);
+    }
+
+    private static RuneliteOverviewView.Opportunity limitedOpportunity(
+        int itemId,
+        int maximumQuantity,
+        int officialBuyLimit,
+        int usedBuyLimit,
+        int remainingBuyLimit)
+    {
+        return new RuneliteOverviewView.Opportunity(
+            itemId,
+            "Test item " + itemId,
+            "expected",
+            2_250,
+            2_500,
+            2_501,
+            2_249,
+            10,
+            100_001,
+            maximumQuantity,
+            200_000,
+            50_000,
+            1234,
+            officialBuyLimit,
+            usedBuyLimit,
+            remainingBuyLimit);
     }
 }

@@ -540,7 +540,12 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         boolean focusedCard = opportunity.itemId == focusedItemId;
         boolean buying = focusedCard && "buy".equals(focusedOfferSide);
         boolean selling = focusedCard && "sell".equals(focusedOfferSide);
-        card.add(compactMetric("Aantal", formatNumber(opportunity.maximumQuantity)));
+        card.add(compactMetric("Aantal", formatNumber(opportunity.effectiveMaximumQuantity())));
+        if (opportunity.hasBuyLimit())
+        {
+            card.add(compactMetric("Limiet gebruikt", buyLimitUsage(opportunity)));
+            card.add(compactMetric("Nog vrij", buyLimitRemaining(opportunity)));
+        }
         card.add(coloredMetric("Koop", priceOrDash(displayedBuyPrice), GOLD, buying));
         card.add(coloredMetric("Verkoop", priceOrDash(displayedSellPrice), GOLD, selling));
         card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE, selling));
@@ -611,7 +616,24 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         return SessionStatsTracker.calculateProfitPerItem(
             displayedBuyPrice,
             displayedSellPrice,
-            opportunity.itemName) * Math.max(0L, opportunity.maximumQuantity);
+            opportunity.itemName) * Math.max(0L, opportunity.effectiveMaximumQuantity());
+    }
+
+    static String buyLimitUsage(RuneliteOverviewView.Opportunity opportunity)
+    {
+        if (opportunity == null || !opportunity.hasBuyLimit())
+        {
+            return "";
+        }
+        return formatNumber(opportunity.usedBuyLimit)
+            + " / " + formatNumber(opportunity.officialBuyLimit);
+    }
+
+    static String buyLimitRemaining(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return opportunity == null || !opportunity.hasBuyLimit()
+            ? ""
+            : formatNumber(opportunity.remainingBuyLimit);
     }
 
     private static JButton primaryActionButton(String text)

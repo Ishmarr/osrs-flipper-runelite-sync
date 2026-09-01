@@ -160,7 +160,17 @@ final class SelectedGeOpportunityResolver
             scannerOpportunity == null ? 0 : scannerOpportunity.maximumQuantity,
             scannerOpportunity == null ? 0 : scannerOpportunity.maximumProfitPerHour,
             scannerOpportunity == null ? 0 : scannerOpportunity.maximumCycleProfit,
-            priceUpdatedAt);
+            priceUpdatedAt,
+            0,
+            scannerOpportunity != null && scannerOpportunity.hasBuyLimit()
+                ? scannerOpportunity.officialBuyLimit
+                : -1,
+            scannerOpportunity != null && scannerOpportunity.hasBuyLimit()
+                ? scannerOpportunity.usedBuyLimit
+                : -1,
+            scannerOpportunity != null && scannerOpportunity.hasBuyLimit()
+                ? scannerOpportunity.remainingBuyLimit
+                : -1);
         return new Resolution(resolved);
     }
 

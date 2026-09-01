@@ -97,7 +97,7 @@ final class RuneliteOverviewView
     int maximumQuantityForItem(int itemId)
     {
         Opportunity opportunity = opportunityForItem(itemId);
-        return opportunity == null ? 0 : opportunity.maximumQuantity;
+        return opportunity == null ? 0 : opportunity.effectiveMaximumQuantity();
     }
 
     PeriodStats statsFor(String period)
@@ -143,6 +143,10 @@ final class RuneliteOverviewView
         final long maximumCycleProfit;
         final long priceUpdatedAt;
         final int lowestSellPrice;
+        final int officialBuyLimit;
+        final int usedBuyLimit;
+        final int remainingBuyLimit;
+        private final boolean buyLimitAvailable;
 
         Opportunity(
             int itemId,
@@ -161,7 +165,8 @@ final class RuneliteOverviewView
         {
             this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy,
                 instantSell, expectedQuantity, expectedProfit, maximumQuantity,
-                maximumProfitPerHour, maximumCycleProfit, priceUpdatedAt, 0);
+                maximumProfitPerHour, maximumCycleProfit, priceUpdatedAt, 0,
+                -1, -1, -1);
         }
 
         Opportunity(
@@ -180,6 +185,55 @@ final class RuneliteOverviewView
             long priceUpdatedAt,
             int lowestSellPrice)
         {
+            this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy,
+                instantSell, expectedQuantity, expectedProfit, maximumQuantity,
+                maximumProfitPerHour, maximumCycleProfit, priceUpdatedAt,
+                lowestSellPrice, -1, -1, -1);
+        }
+
+        Opportunity(
+            int itemId,
+            String itemName,
+            String ranking,
+            int buyPrice,
+            int sellPrice,
+            int instantBuy,
+            int instantSell,
+            int expectedQuantity,
+            long expectedProfit,
+            int maximumQuantity,
+            long maximumProfitPerHour,
+            long maximumCycleProfit,
+            long priceUpdatedAt,
+            int officialBuyLimit,
+            int usedBuyLimit,
+            int remainingBuyLimit)
+        {
+            this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy,
+                instantSell, expectedQuantity, expectedProfit, maximumQuantity,
+                maximumProfitPerHour, maximumCycleProfit, priceUpdatedAt, 0,
+                officialBuyLimit, usedBuyLimit, remainingBuyLimit);
+        }
+
+        Opportunity(
+            int itemId,
+            String itemName,
+            String ranking,
+            int buyPrice,
+            int sellPrice,
+            int instantBuy,
+            int instantSell,
+            int expectedQuantity,
+            long expectedProfit,
+            int maximumQuantity,
+            long maximumProfitPerHour,
+            long maximumCycleProfit,
+            long priceUpdatedAt,
+            int lowestSellPrice,
+            int officialBuyLimit,
+            int usedBuyLimit,
+            int remainingBuyLimit)
+        {
             this.itemId = Math.max(0, itemId);
             this.itemName = itemName == null ? "" : itemName;
             this.ranking = ranking == null ? "" : ranking;
@@ -194,6 +248,31 @@ final class RuneliteOverviewView
             this.maximumCycleProfit = Math.max(0, maximumCycleProfit);
             this.priceUpdatedAt = Math.max(0, priceUpdatedAt);
             this.lowestSellPrice = Math.max(0, lowestSellPrice);
+            this.buyLimitAvailable = officialBuyLimit > 0 && usedBuyLimit >= 0;
+            this.officialBuyLimit = this.buyLimitAvailable
+                ? officialBuyLimit
+                : 0;
+            this.usedBuyLimit = this.buyLimitAvailable
+                ? Math.max(0, usedBuyLimit)
+                : 0;
+            int calculatedRemaining = Math.max(0, this.officialBuyLimit - this.usedBuyLimit);
+            this.remainingBuyLimit = this.buyLimitAvailable
+                ? (remainingBuyLimit >= 0
+                    ? Math.min(Math.max(0, remainingBuyLimit), calculatedRemaining)
+                    : calculatedRemaining)
+                : 0;
+        }
+
+        boolean hasBuyLimit()
+        {
+            return buyLimitAvailable;
+        }
+
+        int effectiveMaximumQuantity()
+        {
+            return buyLimitAvailable
+                ? Math.min(maximumQuantity, remainingBuyLimit)
+                : maximumQuantity;
         }
     }
 

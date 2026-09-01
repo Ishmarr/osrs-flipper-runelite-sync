@@ -1,9 +1,11 @@
 package com.osrsflipper.sync;
 
+import java.util.Collections;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class SelectedGeOpportunityResolverTest
 {
@@ -36,6 +38,53 @@ public class SelectedGeOpportunityResolverTest
 
         assertEquals(656_460, resolved.price("sell"));
         assertEquals("selected_setup", resolved.opportunity.ranking);
+    }
+
+    @Test
+    public void selectedBuyCardKeepsTheSameEffectiveBuyLimitAsTheQuantityEditor()
+    {
+        RuneliteOverviewView.Opportunity scanner = new RuneliteOverviewView.Opportunity(
+            101,
+            "Dragon crossbow",
+            "cycle_profit",
+            650_001,
+            654_688,
+            654_689,
+            650_000,
+            100,
+            10_000,
+            250,
+            50_000,
+            100_000,
+            10,
+            100,
+            70,
+            30);
+        RuneliteOverviewView overview = new RuneliteOverviewView(
+            Collections.singletonList(scanner),
+            Collections.emptyList(),
+            null,
+            null,
+            null,
+            10);
+
+        SelectedGeOpportunityResolver.Resolution resolved =
+            SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                101,
+                "Dragon crossbow",
+                "buy",
+                scanner,
+                new MarketPriceView(101, 656_461, 651_000, 20, 21, 22),
+                null,
+                null);
+
+        assertTrue(resolved.opportunity.hasBuyLimit());
+        assertEquals(30, resolved.opportunity.effectiveMaximumQuantity());
+        assertEquals(overview.maximumQuantityForItem(101),
+            resolved.opportunity.effectiveMaximumQuantity());
+        assertEquals("70 / 100", OsrsFlipperSyncPanel.buyLimitUsage(resolved.opportunity));
+        assertEquals("30", OsrsFlipperSyncPanel.buyLimitRemaining(resolved.opportunity));
     }
 
     @Test

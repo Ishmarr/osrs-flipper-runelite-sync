@@ -36,6 +36,39 @@ public class OverviewRefreshContractTest
         assertEquals("12780", url.queryParameter("focus_item_id"));
         assertEquals("2434,4151", url.queryParameter("tracked_item_ids"));
         assertNull(url.queryParameter("fresh_market"));
+        assertNull(url.queryParameter("fresh_buy_limits"));
+    }
+
+    @Test
+    public void confirmedSlotSyncRequestsAuthoritativeBuyLimitUsage()
+    {
+        HttpUrl url = OsrsFlipperSyncPlugin.overviewUrl(
+            HttpUrl.parse("https://example.test/runelite-api/overview"),
+            100,
+            200,
+            0,
+            false,
+            true,
+            null);
+
+        assertEquals("1", url.queryParameter("fresh_buy_limits"));
+        assertNull(url.queryParameter("fresh_market"));
+    }
+
+    @Test
+    public void outboxBatchRefreshesBuyLimitsOnlyForAppliedOrDuplicateBuyEvents()
+    {
+        assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "applied"));
+        assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "duplicate"));
+        assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "rejected"));
+        assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("sell", "applied"));
+
+        assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.NONE,
+            OsrsFlipperSyncPlugin.outboxOverviewRefresh(false, true));
+        assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.FRESH_BUY_LIMITS,
+            OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, true));
+        assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.NORMAL,
+            OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, false));
     }
 
     @Test
@@ -81,5 +114,28 @@ public class OverviewRefreshContractTest
         anyWorkerRequestInFlight.setAccessible(true);
 
         assertTrue((Boolean) anyWorkerRequestInFlight.invoke(plugin));
+    }
+
+    @Test
+    public void invalidatingAnAccountOrConnectionContextClearsBuyLimitRefreshState()
+        throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = new OsrsFlipperSyncPlugin();
+        Field freshPending = OsrsFlipperSyncPlugin.class.getDeclaredField(
+            "overviewFreshBuyLimitsPending");
+        Field batchDirty = OsrsFlipperSyncPlugin.class.getDeclaredField(
+            "outboxBatchBuyLimitDirty");
+        freshPending.setAccessible(true);
+        batchDirty.setAccessible(true);
+        freshPending.setBoolean(plugin, true);
+        batchDirty.setBoolean(plugin, true);
+
+        Method invalidate = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+            "invalidateOverviewContext");
+        invalidate.setAccessible(true);
+        invalidate.invoke(plugin);
+
+        assertFalse(freshPending.getBoolean(plugin));
+        assertFalse(batchDirty.getBoolean(plugin));
     }
 }

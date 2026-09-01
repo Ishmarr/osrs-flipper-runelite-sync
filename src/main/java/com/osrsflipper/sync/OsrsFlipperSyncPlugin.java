@@ -44,6 +44,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.api.gameval.InterfaceID;
@@ -78,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.22";
+    private static final String PLUGIN_VERSION = "5.2.23";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -144,6 +145,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
     @Inject
     private ClientToolbar clientToolbar;
 
+    @Inject
+    private OverlayManager overlayManager;
+
+    @Inject
+    private GeSlotTimerOverlay geSlotTimerOverlay;
+
     private OsrsFlipperSyncPanel panel;
     private NavigationButton navButton;
 
@@ -161,6 +168,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private long activeAccountHash = NO_ACCOUNT;
     private boolean started;
     private boolean requestInFlight;
+    private boolean outboxBatchBuyLimitDirty;
     private boolean pairingInFlight;
     private boolean statusInFlight;
     private boolean statusCheckPending;
@@ -196,6 +204,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean cashInFlight;
     private boolean overviewRefreshPending;
     private boolean overviewFreshMarketPending;
+    private boolean overviewFreshBuyLimitsPending;
     private int overviewTicks;
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
@@ -216,6 +225,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         started = true;
         requestInFlight = false;
+        outboxBatchBuyLimitDirty = false;
         pairingInFlight = false;
         statusInFlight = false;
         statusCheckPending = true;
@@ -243,6 +253,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         cashInFlight = false;
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
+        overviewFreshBuyLimitsPending = false;
         overviewTicks = OVERVIEW_GAME_TICKS;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
@@ -266,6 +277,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         geOpenTicks = 0;
 
         createSidePanel();
+        overlayManager.add(geSlotTimerOverlay);
         switchToCurrentAccount();
         updateInitialConnectionStatus();
         checkDeviceStatus();
@@ -279,6 +291,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     @Override
     protected void shutDown()
     {
+        overlayManager.remove(geSlotTimerOverlay);
         if (navButton != null)
         {
             clientToolbar.removeNavigation(navButton);
@@ -314,6 +327,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         flipCycles.clear();
         geItemPresence.clear();
         outbox.clear();
+        outboxBatchBuyLimitDirty = false;
         marketPrices.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
@@ -321,6 +335,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         invalidateOverviewContext();
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
+        overviewFreshBuyLimitsPending = false;
         overviewTicks = 0;
         forcedOverviewDelayTicks = 0;
         focusedGeItemId = 0;
@@ -1415,6 +1430,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             markWorkerSuccess();
             outbox.removeFirst();
             SyncResponse syncResponse = parseSyncResponse(responseText);
+            if (successfulBuyLimitEvent(queued.event, syncResponse))
+            {
+                outboxBatchBuyLimitDirty = true;
+            }
             applyServerSlotsFromResults(syncResponse == null ? null : syncResponse.results);
             boolean rejected = syncResponse != null && syncResponse.summary != null &&
                 syncResponse.summary.rejected > 0;
@@ -1431,10 +1450,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             persistCurrentAccount();
             flushOutboxIfPossible();
             checkServerSlotStateIfPossible();
-            if (outbox.isEmpty())
-            {
-                requestOverview(true);
-            }
+            refreshOverviewAfterCompletedOutboxBatch();
             return;
         }
 
@@ -1454,6 +1470,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             LOG.error("GE-event {} definitief geweigerd met HTTP {}: {}",
                 eventId, statusCode, abbreviate(responseText, 500));
             flushOutboxIfPossible();
+            refreshOverviewAfterCompletedOutboxBatch();
             return;
         }
 
@@ -1626,7 +1643,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             debug("Volledige GE-slotsnapshot door webapp ontvangen");
             flushOutboxIfPossible();
             checkServerSlotStateIfPossible();
-            requestOverview(true);
+            requestFreshBuyLimitOverview();
             return;
         }
 
@@ -2043,6 +2060,85 @@ public class OsrsFlipperSyncPlugin extends Plugin
         return queued;
     }
 
+    private static boolean successfulBuyLimitEvent(SyncEvent event, SyncResponse response)
+    {
+        if (event == null || !"buy".equals(event.side) || response == null)
+        {
+            return false;
+        }
+
+        boolean resultPresent = false;
+        if (response.results != null)
+        {
+            for (SyncResult result : response.results)
+            {
+                if (result == null)
+                {
+                    continue;
+                }
+                resultPresent = true;
+                if (syncResultChangesBuyLimit(event.side, result.outcome))
+                {
+                    return true;
+                }
+            }
+        }
+        if (resultPresent)
+        {
+            return false;
+        }
+
+        return response.summary != null &&
+            (response.summary.applied > 0 || response.summary.duplicates > 0);
+    }
+
+    static boolean syncResultChangesBuyLimit(String side, String outcome)
+    {
+        return "buy".equals(side) &&
+            ("applied".equals(outcome) || "duplicate".equals(outcome));
+    }
+
+    static OutboxOverviewRefresh outboxOverviewRefresh(
+        boolean outboxEmpty,
+        boolean buyLimitDirty)
+    {
+        if (!outboxEmpty)
+        {
+            return OutboxOverviewRefresh.NONE;
+        }
+        return buyLimitDirty
+            ? OutboxOverviewRefresh.FRESH_BUY_LIMITS
+            : OutboxOverviewRefresh.NORMAL;
+    }
+
+    private void refreshOverviewAfterCompletedOutboxBatch()
+    {
+        OutboxOverviewRefresh refresh = outboxOverviewRefresh(
+            outbox.isEmpty(),
+            outboxBatchBuyLimitDirty);
+        if (refresh == OutboxOverviewRefresh.NONE)
+        {
+            return;
+        }
+
+        outboxBatchBuyLimitDirty = false;
+        if (refresh == OutboxOverviewRefresh.FRESH_BUY_LIMITS)
+        {
+            requestFreshBuyLimitOverview();
+        }
+        else
+        {
+            requestOverview(true);
+        }
+    }
+
+    enum OutboxOverviewRefresh
+    {
+        NONE,
+        NORMAL,
+        FRESH_BUY_LIMITS
+    }
+
     private void scheduleRetry(QueuedEvent queued)
     {
         queued.attempts = Math.max(0, queued.attempts) + 1;
@@ -2245,6 +2341,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewInFlight = false;
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
+        overviewFreshBuyLimitsPending = false;
+        outboxBatchBuyLimitDirty = false;
     }
 
     private void setConnectionStatus(String value)
@@ -2379,15 +2477,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void requestOverview(boolean force)
     {
-        requestOverview(force, false);
+        requestOverview(force, false, false);
     }
 
     private void requestFreshMarketOverview()
     {
-        requestOverview(true, true);
+        requestOverview(true, true, false);
     }
 
-    private void requestOverview(boolean force, boolean freshMarket)
+    private void requestFreshBuyLimitOverview()
+    {
+        requestOverview(true, false, true);
+    }
+
+    private void requestOverview(boolean force, boolean freshMarket, boolean freshBuyLimits)
     {
         if (!started || pairingInFlight || !hasDeviceToken())
         {
@@ -2402,6 +2505,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (freshMarket)
             {
                 overviewFreshMarketPending = true;
+            }
+            if (freshBuyLimits)
+            {
+                overviewFreshBuyLimitsPending = true;
             }
             return;
         }
@@ -2422,6 +2529,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             monthStart,
             focusedGeItemId,
             freshMarket,
+            freshBuyLimits,
             trackedGuidanceItemIds());
         Request request = authorizedRequest(url).get().build();
         long requestAccountHash = activeAccountHash;
@@ -2487,6 +2595,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             overviewInFlight = false;
             overviewRefreshPending = false;
             overviewFreshMarketPending = false;
+            overviewFreshBuyLimitsPending = false;
             clearStoredPairing("Koppeling ongeldig of ingetrokken; maak een nieuwe code");
             return;
         }
@@ -2564,9 +2673,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (overviewRefreshPending)
         {
             boolean freshMarket = overviewFreshMarketPending;
+            boolean freshBuyLimits = overviewFreshBuyLimitsPending;
             overviewRefreshPending = false;
             overviewFreshMarketPending = false;
-            requestOverview(true, freshMarket);
+            overviewFreshBuyLimitsPending = false;
+            requestOverview(true, freshMarket, freshBuyLimits);
         }
     }
 
@@ -2593,6 +2704,25 @@ public class OsrsFlipperSyncPlugin extends Plugin
         boolean freshMarket,
         Set<Integer> trackedItemIds)
     {
+        return overviewUrl(
+            base,
+            dayStart,
+            monthStart,
+            focusItemId,
+            freshMarket,
+            false,
+            trackedItemIds);
+    }
+
+    static HttpUrl overviewUrl(
+        HttpUrl base,
+        long dayStart,
+        long monthStart,
+        int focusItemId,
+        boolean freshMarket,
+        boolean freshBuyLimits,
+        Set<Integer> trackedItemIds)
+    {
         HttpUrl.Builder url = base.newBuilder()
             .addQueryParameter("day_start", Long.toString(dayStart))
             .addQueryParameter("month_start", Long.toString(monthStart));
@@ -2606,6 +2736,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // mag de marktcache omzeilen. Periodieke requests sturen deze
             // parameter bewust niet mee.
             url.addQueryParameter("fresh_market", "1");
+        }
+        if (freshBuyLimits)
+        {
+            // Alleen na een bevestigde slotsync: de Worker leest dan het actuele
+            // vieruursverbruik opnieuw, ook wanneer deze request een andere
+            // isolate bereikt dan de voorafgaande write.
+            url.addQueryParameter("fresh_buy_limits", "1");
         }
         List<Integer> tracked = new ArrayList<>();
         if (trackedItemIds != null)
@@ -3399,6 +3536,38 @@ public class OsrsFlipperSyncPlugin extends Plugin
             previous.totalQuantity == totalQuantity;
     }
 
+    GeSlotTimerView geSlotTimerView(int zeroBasedSlot, GrandExchangeOffer liveOffer)
+    {
+        if (zeroBasedSlot < 0 || zeroBasedSlot >= SLOT_COUNT || liveOffer == null ||
+            liveOffer.getState() == null || liveOffer.getState() == GrandExchangeOfferState.EMPTY)
+        {
+            return null;
+        }
+
+        SlotSnapshot snapshot = slotSnapshots.get(zeroBasedSlot + 1);
+        String liveSide = sideFor(liveOffer.getState());
+        if (!isSameOffer(
+                snapshot,
+                liveOffer.getItemId(),
+                liveSide,
+                liveOffer.getPrice(),
+                liveOffer.getTotalQuantity()) ||
+            isTerminal(snapshot.status) != isTerminalGeState(liveOffer.getState()))
+        {
+            return null;
+        }
+
+        return GeSlotTimerView.create(snapshot.side, snapshot.startedAt, snapshot.endedAt);
+    }
+
+    private static boolean isTerminalGeState(GrandExchangeOfferState state)
+    {
+        return state == GrandExchangeOfferState.BOUGHT ||
+            state == GrandExchangeOfferState.SOLD ||
+            state == GrandExchangeOfferState.CANCELLED_BUY ||
+            state == GrandExchangeOfferState.CANCELLED_SELL;
+    }
+
     private static boolean sameOfferShape(
         SlotSnapshot previous,
         int itemId,
@@ -4157,6 +4326,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         int expected_quantity;
         long expected_profit;
         int maximum_quantity;
+        int official_buy_limit;
+        int used_buy_limit;
+        int remaining_buy_limit;
         long maximum_profit_per_hour;
         long maximum_cycle_profit;
         long price_updated_at;
@@ -4176,7 +4348,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 maximum_quantity,
                 maximum_profit_per_hour,
                 maximum_cycle_profit,
-                price_updated_at);
+                price_updated_at,
+                official_buy_limit,
+                used_buy_limit,
+                remaining_buy_limit);
         }
     }
 

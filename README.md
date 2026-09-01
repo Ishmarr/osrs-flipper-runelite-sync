@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.22
+# OSRS Flipper Sync v5.2.23
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.23
+
+- `Aantal` houdt rekening met de officiële vieruurs-buy limit, reeds gekochte stuks en nog open koopofferrestanten; de kaart toont hoeveel van de limiet bezet en nog vrij is.
+- Bevestigde koopupdates vragen een gezaghebbende limietstatus op. Verkoop-only syncs blijven de bestaande lichte overviewcache gebruiken.
+- Alle acht Grand Exchange-slots tonen naast `Buy` of `Sell` een klikvrije `HH:MM:SS`-timer. Actieve offers lopen live door en voltooide of geannuleerde offers bevriezen op hun eindtijd totdat het slot wordt leeggemaakt.
+- De overlay cachet widgetlabels en timertekst defensief, zodat de GE-weergave ook met acht bezette slots licht blijft.
 
 ## 5.2.22
 
