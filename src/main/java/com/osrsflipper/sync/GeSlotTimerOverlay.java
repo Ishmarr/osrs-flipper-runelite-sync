@@ -36,6 +36,7 @@ final class GeSlotTimerOverlay extends Overlay
 {
     private static final int TEXT_GAP = 4;
     private static final int SLOT_PADDING = 3;
+    private static final float MIN_TIMER_FONT_SIZE = 6.0F;
     private static final Color FALLBACK_TIMER_COLOR = new Color(0xFF981F);
 
     private static final int[] SLOT_WIDGET_IDS =
@@ -78,7 +79,7 @@ final class GeSlotTimerOverlay extends Overlay
 
         Font previousFont = graphics.getFont();
         Color previousColor = graphics.getColor();
-        graphics.setFont(FontManager.getRunescapeSmallFont());
+        graphics.setFont(timerFont(FontManager.getRunescapeSmallFont()));
 
         try
         {
@@ -154,6 +155,12 @@ final class GeSlotTimerOverlay extends Overlay
 
         String visibleText = Text.removeTags(widgetText).trim();
         return visibleText.equalsIgnoreCase(expectedSideLabel.trim());
+    }
+
+    static Font timerFont(Font baseFont)
+    {
+        float timerSize = Math.max(MIN_TIMER_FONT_SIZE, baseFont.getSize2D() - 1.0F);
+        return baseFont.deriveFont(timerSize);
     }
 
     static Point timerLocation(

@@ -1,5 +1,6 @@
 package com.osrsflipper.sync;
 
+import java.awt.Font;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.lang.reflect.InvocationHandler;
@@ -25,6 +26,19 @@ public class GeSlotTimerOverlayTest
         assertFalse(GeSlotTimerOverlay.isMatchingOfferLabelText("Buy offer", "Buy"));
         assertFalse(GeSlotTimerOverlay.isMatchingOfferLabelText("Sell", "Buy"));
         assertFalse(GeSlotTimerOverlay.isMatchingOfferLabelText(null, "Buy"));
+    }
+
+    @Test
+    public void derivesTimerFontOnePointSmallerWithSafeMinimum()
+    {
+        Font base = new Font(Font.DIALOG, Font.BOLD, 12);
+        Font smaller = GeSlotTimerOverlay.timerFont(base);
+        Font minimum = GeSlotTimerOverlay.timerFont(base.deriveFont(6.0F));
+
+        assertEquals(base.getFamily(), smaller.getFamily());
+        assertEquals(base.getStyle(), smaller.getStyle());
+        assertEquals(11.0F, smaller.getSize2D(), 0.0F);
+        assertEquals(6.0F, minimum.getSize2D(), 0.0F);
     }
 
     @Test

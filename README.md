@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.23
+# OSRS Flipper Sync v5.2.24
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.24
+
+- De timer naast `Buy` en `Sell` is één punt kleiner, zodat hij ook in compacte GE-slots netjes binnen het vak past.
+- Iedere echte gedeeltelijke koop- of verkoopfill zet de actieve slottimer terug op `00:00:00`; gewone refreshes, prijsadviesupdates en repricing zonder nieuwe fill doen dat niet.
+- Een volledig gekocht of verkocht offer toont vast de totale duur vanaf de oorspronkelijke offerstart tot de laatste fill, in plaats van op nul te eindigen.
+- Fill-resets en hun high-watermark worden lokaal per account bewaard, zodat een RuneLite-herstart of tijdelijke terugval van het waargenomen aantal geen foutieve timerreset veroorzaakt.
 
 ## 5.2.23
 

@@ -79,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.23";
+    private static final String PLUGIN_VERSION = "5.2.24";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -1063,6 +1063,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             sameOffer = false;
         }
+        boolean continuingReplacement = !sameOffer &&
+            (OfferGuidanceResolver.continuesOfferLifecycle(
+                sameOfferShape(previous, itemId, side, totalQuantity),
+                previous == null ? "" : previous.status) ||
+                continuesCancelledReprice(
+                    previous,
+                    itemId,
+                    side,
+                    price,
+                    totalQuantity));
         long observedAt = now();
         long eventAt = Math.max(observedAt, (previous == null ? 0 : previous.lastEventAt) + 1);
         SlotSnapshot next;
@@ -1091,15 +1101,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             captureStartMarketSnapshot(next);
             if ("buy".equals(side))
             {
-                boolean continuingBuyOffer = OfferGuidanceResolver.continuesOfferLifecycle(
-                    sameOfferShape(previous, itemId, side, totalQuantity),
-                    previous == null ? "" : previous.status) ||
-                    continuesCancelledReprice(
-                        previous,
-                        itemId,
-                        side,
-                        price,
-                        totalQuantity);
+                boolean continuingBuyOffer = continuingReplacement;
                 int currentSellCandidate = continuingBuyOffer
                     ? liveWikiSellRaiseCandidateFor(itemId)
                     : initialSuggestedSellPriceFor(itemId);
@@ -1133,15 +1135,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             else
             {
-                boolean continuingSellOffer = OfferGuidanceResolver.continuesOfferLifecycle(
-                    sameOfferShape(previous, itemId, side, totalQuantity),
-                    previous == null ? "" : previous.status) ||
-                    continuesCancelledReprice(
-                        previous,
-                        itemId,
-                        side,
-                        price,
-                        totalQuantity);
+                boolean continuingSellOffer = continuingReplacement;
                 if (continuingSellOffer)
                 {
                     int currentSellCandidate = liveWikiSellRaiseCandidateFor(itemId);
@@ -1231,6 +1225,21 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             eventType = eventTypeFor(side, status, false, previous, next);
         }
+
+        GeSlotTimerLifecycle.State timerState = GeSlotTimerLifecycle.advance(
+            previous == null ? 0 : previous.timerStartedAt,
+            previous == null ? 0 : previous.lastFillAt,
+            previous == null ? 0 : previous.startedAt,
+            previous == null ? 0 : previous.timerFillHighWaterMark,
+            previous == null ? 0 : previous.filledQuantity,
+            next.filledQuantity,
+            sameOffer,
+            continuingReplacement,
+            next.startedAt,
+            observedAt);
+        next.timerStartedAt = timerState.timerStartedAt;
+        next.lastFillAt = timerState.lastFillAt;
+        next.timerFillHighWaterMark = timerState.fillHighWaterMark;
 
         String fingerprint = fingerprint(next);
         if (previous != null && fingerprint.equals(previous.fingerprint))
@@ -3557,7 +3566,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return null;
         }
 
-        return GeSlotTimerView.create(snapshot.side, snapshot.startedAt, snapshot.endedAt);
+        long displayedTimerStartedAt = isTerminal(snapshot.status)
+            ? snapshot.startedAt
+            : activeTimerStartedAt(snapshot);
+        return GeSlotTimerView.create(
+            snapshot.side,
+            displayedTimerStartedAt,
+            snapshot.endedAt);
     }
 
     private static boolean isTerminalGeState(GrandExchangeOfferState state)
@@ -3566,6 +3581,19 @@ public class OsrsFlipperSyncPlugin extends Plugin
             state == GrandExchangeOfferState.SOLD ||
             state == GrandExchangeOfferState.CANCELLED_BUY ||
             state == GrandExchangeOfferState.CANCELLED_SELL;
+    }
+
+    private static long activeTimerStartedAt(SlotSnapshot snapshot)
+    {
+        if (snapshot.timerStartedAt > 0)
+        {
+            return snapshot.timerStartedAt;
+        }
+        if (snapshot.lastFillAt > 0)
+        {
+            return snapshot.lastFillAt;
+        }
+        return snapshot.startedAt;
     }
 
     private static boolean sameOfferShape(
@@ -4446,6 +4474,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         String offerId;
         long startedAt;
         long endedAt;
+        long timerStartedAt;
+        long lastFillAt;
+        int timerFillHighWaterMark;
         long eventSequence;
         long lastEventAt;
         long serverVersion;
@@ -4474,6 +4505,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             copy.offerId = offerId;
             copy.startedAt = startedAt;
             copy.endedAt = endedAt;
+            copy.timerStartedAt = timerStartedAt;
+            copy.lastFillAt = lastFillAt;
+            copy.timerFillHighWaterMark = timerFillHighWaterMark;
             copy.eventSequence = eventSequence;
             copy.lastEventAt = lastEventAt;
             copy.serverVersion = serverVersion;
