@@ -1,6 +1,14 @@
-# OSRS Flipper Sync v5.2.24
+# OSRS Flipper Sync v5.2.25
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.25
+
+- Bij login wordt nog maar één actuele volledige slotsnapshot verstuurd; een tijdens accountload klaargezette snapshot wacht eerst op de RuneLite-reconciliatie.
+- Het openen van de Grand Exchange verstuurt alleen een snapshot wanneer de slotinhoud werkelijk gewijzigd is.
+- De lokale vijfminutencontrole en onmiddellijke delta-events blijven behouden, maar de periodieke ongewijzigde veiligheidssnapshot gaat naar maximaal één per uur.
+- Een complete, conflictvrije snapshotrespons wordt direct als servercontrole gebruikt, zodat daarna geen dubbele `/state`-aanvraag meer nodig is. Onvolledige of conflicterende antwoorden behouden de veilige fallback.
+- Een volle lokale eventwachtrij forceert een herstelsnapshot, zodat de lagere requestfrequentie geen GE-mutatie kan verliezen.
 
 ## 5.2.24
 
@@ -55,7 +63,7 @@ RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracke
 - synchroniseert alle acht Grand Exchange-slots;
 - stuurt wijzigingen onmiddellijk door;
 - bewaart tijdelijk niet-verzonden gebeurtenissen lokaal en probeert ze opnieuw;
-- stuurt periodieke volledige snapshots en heartbeats;
+- controleert de slots lokaal iedere vijf minuten, stuurt wijzigingen onmiddellijk en gebruikt maximaal ieder uur een ongewijzigde veiligheidssnapshot;
 - vergelijkt de lokale toestand met de server en herstelt verschillen automatisch;
 - biedt een compact RuneLite-zijpaneel met **Slots**, **Flips**, **Stats** en **Sync**;
 - toont alle actuele GE-slots met itemicoon, koop/verkoopzijde, voortgang, prijs en live timer;

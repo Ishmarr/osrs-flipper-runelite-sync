@@ -79,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.24";
+    private static final String PLUGIN_VERSION = "5.2.25";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -109,7 +109,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
     private static final int HEARTBEAT_GAME_TICKS = 100;
     private static final int SERVER_STATE_GAME_TICKS = 200;
-    private static final int FULL_SNAPSHOT_GAME_TICKS = 500;
     private static final int MARKET_PRICE_GAME_TICKS = 100;
     // Een game tick duurt ongeveer 600 ms. De kanslijst wordt dus ongeveer
     // iedere minuut opnieuw opgehaald, terwijl de Worker zijn lichte cache kan
@@ -185,6 +184,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int geOpenTicks;
     private int heartbeatTicks;
     private int serverStateTicks;
+    private int localReconcileTicks;
     private int fullSnapshotTicks;
     private int marketPriceTicks;
     private long snapshotSequence;
@@ -246,6 +246,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerBackoffUntil = 0;
         heartbeatTicks = HEARTBEAT_GAME_TICKS;
         serverStateTicks = SERVER_STATE_GAME_TICKS;
+        localReconcileTicks = 0;
         fullSnapshotTicks = 0;
         marketPriceTicks = MARKET_PRICE_GAME_TICKS;
         marketPriceInFlight = false;
@@ -323,6 +324,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         serverStateRetryAttempts = 0;
         serverStateNextAttemptAt = 0;
         workerBackoffUntil = 0;
+        localReconcileTicks = 0;
+        fullSnapshotTicks = 0;
         slotSnapshots.clear();
         flipCycles.clear();
         geItemPresence.clear();
@@ -359,6 +362,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             loggedInTicks = 0;
             heartbeatTicks = HEARTBEAT_GAME_TICKS;
             serverStateTicks = SERVER_STATE_GAME_TICKS;
+            localReconcileTicks = 0;
             fullSnapshotTicks = 0;
             statusCheckPending = true;
             serverStateCheckPending = true;
@@ -393,8 +397,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
             loggedInTicks++;
             if (loggedInTicks >= LOGIN_RECONCILE_TICKS)
             {
-                loginReconciliationPending = false;
-                reconcileAllSlots("login");
+                if (reconcileAllSlots(
+                    "login",
+                    SnapshotSyncPolicy.ReconcileMode.ALWAYS))
+                {
+                    loginReconciliationPending = false;
+                    loggedInTicks = 0;
+                    flushOutboxIfPossible();
+                    checkServerSlotStateIfPossible();
+                }
             }
         }
 
@@ -404,7 +415,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (geOpenTicks >= GE_OPEN_RECONCILE_TICKS)
             {
                 geOpenReconciliationPending = false;
-                reconcileAllSlots("ge_open");
+                reconcileAllSlots(
+                    "ge_open",
+                    SnapshotSyncPolicy.ReconcileMode.WHEN_CHANGED);
             }
         }
 
@@ -428,11 +441,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
             serverStateCheckPending = true;
         }
 
+        localReconcileTicks++;
         fullSnapshotTicks++;
-        if (fullSnapshotTicks >= FULL_SNAPSHOT_GAME_TICKS)
+        SnapshotSyncPolicy.TickAction snapshotTickAction = SnapshotSyncPolicy.tickAction(
+            localReconcileTicks,
+            fullSnapshotTicks);
+        if (snapshotTickAction == SnapshotSyncPolicy.TickAction.HOURLY_SNAPSHOT)
         {
-            fullSnapshotTicks = 0;
-            reconcileAllSlots("periodic");
+            if (reconcileAllSlots(
+                "periodic_hourly",
+                SnapshotSyncPolicy.ReconcileMode.ALWAYS))
+            {
+                localReconcileTicks = 0;
+            }
+        }
+        else if (snapshotTickAction == SnapshotSyncPolicy.TickAction.LOCAL_RECONCILE)
+        {
+            if (reconcileAllSlots(
+                "periodic_reconcile",
+                SnapshotSyncPolicy.ReconcileMode.NEVER))
+            {
+                localReconcileTicks = 0;
+            }
         }
 
         marketPriceTicks++;
@@ -631,7 +661,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             serverStateNextAttemptAt = 0;
             workerBackoffUntil = 0;
             setConnectionStatus("Volledige synchronisatie gestart...");
-            reconcileAllSlots("manual");
+            reconcileAllSlots(
+                "manual",
+                SnapshotSyncPolicy.ReconcileMode.ALWAYS);
             serverStateCheckPending = true;
             flushOutboxIfPossible();
         });
@@ -769,7 +801,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             requestOverview(true);
             if (client.getGameState() == GameState.LOGGED_IN)
             {
-                reconcileAllSlots("paired");
+                reconcileAllSlots(
+                    "paired",
+                    SnapshotSyncPolicy.ReconcileMode.ALWAYS);
             }
             else
             {
@@ -970,21 +1004,23 @@ public class OsrsFlipperSyncPlugin extends Plugin
         });
     }
 
-    private void reconcileAllSlots(String reason)
+    private boolean reconcileAllSlots(
+        String reason,
+        SnapshotSyncPolicy.ReconcileMode snapshotMode)
     {
         GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
-        if (offers == null)
+        if (!hasCompleteRuneLiteSlotArray(offers))
         {
             if (manualSyncPending || "manual".equals(reason))
             {
                 manualSyncPending = false;
                 setConnectionStatus("Synchronisatie niet gestart: open eerst de Grand Exchange");
             }
-            return;
+            return false;
         }
 
-        int count = Math.min(SLOT_COUNT, offers.length);
-        for (int slot = 0; slot < count; slot++)
+        String contentBefore = localSlotContentDigest();
+        for (int slot = 0; slot < SLOT_COUNT; slot++)
         {
             GrandExchangeOffer offer = offers[slot];
             if (offer != null)
@@ -995,13 +1031,55 @@ public class OsrsFlipperSyncPlugin extends Plugin
         repairUnlinkedSellCycles();
         refreshSidePanel();
         requestMarketPrices(false);
-        queueFullSnapshot(reason);
+        boolean changed = !Objects.equals(contentBefore, localSlotContentDigest());
+        if (SnapshotSyncPolicy.shouldQueueSnapshot(snapshotMode, changed))
+        {
+            queueFullSnapshot(reason);
+        }
         persistCurrentAccount();
         flushOutboxIfPossible();
+        return true;
+    }
+
+    private static boolean hasCompleteRuneLiteSlotArray(GrandExchangeOffer[] offers)
+    {
+        if (offers == null || offers.length != SLOT_COUNT)
+        {
+            return false;
+        }
+        for (int slot = 0; slot < SLOT_COUNT; slot++)
+        {
+            if (offers[slot] == null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String localSlotContentDigest()
+    {
+        StringBuilder digest = new StringBuilder();
+        for (int slotNumber = 1; slotNumber <= SLOT_COUNT; slotNumber++)
+        {
+            SlotSnapshot snapshot = slotSnapshots.get(slotNumber);
+            digest.append(slotNumber).append('=');
+            if (snapshot == null || "empty".equals(snapshot.status))
+            {
+                digest.append("empty");
+            }
+            else
+            {
+                digest.append(fingerprint(snapshot));
+            }
+            digest.append(';');
+        }
+        return digest.toString();
     }
 
     private void queueFullSnapshot(String reason)
     {
+        fullSnapshotTicks = 0;
         snapshotPending = true;
         snapshotReason = isBlank(reason) ? "reconcile" : reason;
         if (snapshotInFlight)
@@ -1328,7 +1406,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         if (outbox.size() >= MAX_OUTBOX_SIZE)
         {
-            LOG.error("Synchronisatiewachtrij is vol; event {} kon niet worden toegevoegd", event.eventId);
+            queueFullSnapshot("outbox_overflow");
+            LOG.error(
+                "Synchronisatiewachtrij is vol; event {} wordt via een herstelsnapshot gereconcilieerd",
+                event.eventId);
             return;
         }
 
@@ -1492,7 +1573,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void sendFullSnapshotIfPossible()
     {
-        if (!snapshotPending || snapshotInFlight || requestInFlight || !outbox.isEmpty() ||
+        if (!snapshotPending || snapshotInFlight || requestInFlight || loginReconciliationPending ||
+            !outbox.isEmpty() ||
             statusInFlight || heartbeatInFlight || slotStateInFlight || pairingInFlight ||
             !hasDeviceToken() || client.getGameState() != GameState.LOGGED_IN || now() < workerBackoffUntil)
         {
@@ -1587,6 +1669,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void handleSnapshotFailure(String snapshotId, IOException exception)
     {
         snapshotInFlight = false;
+        serverStateCheckPending = true;
         if (pendingSnapshot != null && Objects.equals(pendingSnapshot.snapshotId, snapshotId))
         {
             if (snapshotDirty)
@@ -1621,12 +1704,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        boolean manualSnapshot = manualSyncPending || "manual".equals(pendingSnapshot.reason);
         ServerStateResponse stateResponse = parseServerStateResponse(body);
         if (statusCode >= 200 && statusCode < 300 && stateResponse != null && stateResponse.success)
         {
             markWorkerSuccess();
-            applyServerStateRows(stateResponse.data);
             pendingSnapshot = null;
             snapshotPending = snapshotDirty;
             snapshotDirty = false;
@@ -1634,13 +1715,51 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 snapshotReason = "changed_during_snapshot";
             }
-            serverStateCheckPending = true;
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
-            persistCurrentAccount();
-            if (manualSnapshot)
+
+            boolean trustedSnapshotState = SnapshotSyncPolicy.canUseSuccessfulSnapshotState(
+                statusCode,
+                stateResponse.success,
+                !Boolean.FALSE.equals(stateResponse.reconcile_required),
+                serverSlotNumbers(stateResponse.data));
+            boolean stateMatches = false;
+            if (trustedSnapshotState)
             {
-                if (!snapshotPending && outbox.isEmpty())
+                stateMatches = compareAndMergeServerState(stateResponse.data);
+                if (stateMatches)
+                {
+                    serverStateCheckPending = false;
+                }
+                else
+                {
+                    LOG.warn("Slotsnapshot wijkt af van de actuele RuneLite-slots; herstelsnapshot wordt gestuurd");
+                    boolean recoveryQueued = snapshotPending;
+                    if (!recoveryQueued)
+                    {
+                        recoveryQueued = reconcileAllSlots(
+                            "server_difference",
+                            SnapshotSyncPolicy.ReconcileMode.ALWAYS) && snapshotPending;
+                    }
+                    serverStateCheckPending = !recoveryQueued;
+                }
+            }
+            else
+            {
+                // Alleen een expliciet complete, conflictvrije acht-slotrespons mag
+                // de aparte /state-controle vervangen.
+                applyServerStateRows(stateResponse.data);
+                serverStateCheckPending = true;
+            }
+
+            persistCurrentAccount();
+            if (manualSyncPending)
+            {
+                if (trustedSnapshotState && SnapshotSyncPolicy.canFinishManualSync(
+                    !stateMatches,
+                    snapshotPending,
+                    snapshotInFlight,
+                    outbox.isEmpty()))
                 {
                     finishManualSync();
                 }
@@ -1662,12 +1781,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (statusCode == 409 || (stateResponse != null && stateResponse.reconcile_required))
+        if (statusCode == 409 ||
+            (stateResponse != null && Boolean.TRUE.equals(stateResponse.reconcile_required)))
         {
             applyServerStateRows(stateResponse == null ? null : stateResponse.data);
             pendingSnapshot = null;
-            snapshotPending = false;
+            snapshotPending = snapshotDirty;
             snapshotDirty = false;
+            if (snapshotPending)
+            {
+                snapshotReason = "changed_during_conflicted_snapshot";
+            }
             serverStateCheckPending = true;
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
@@ -1678,6 +1802,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             LOG.warn("Slotsnapshot conflicteerde met een nieuwere servertoestand; automatische reconciliatie volgt: {}",
                 abbreviate(body, 400));
+            flushOutboxIfPossible();
             checkServerSlotStateIfPossible();
             return;
         }
@@ -1711,6 +1836,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             scheduleSnapshotRetry(pendingSnapshot);
         }
+        serverStateCheckPending = true;
         registerWorkerBackoff(pendingSnapshot == null ? scheduleTransientRetry(1) : pendingSnapshot.nextAttemptAt);
         persistCurrentAccount();
         if (manualSyncPending)
@@ -1731,6 +1857,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void checkServerSlotStateIfPossible()
     {
         if (!serverStateCheckPending || slotStateInFlight || anyWorkerRequestInFlight() ||
+            loginReconciliationPending ||
             !outbox.isEmpty() || snapshotPending || !hasDeviceToken() ||
             client.getGameState() != GameState.LOGGED_IN)
         {
@@ -1789,7 +1916,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode >= 200 && statusCode < 300)
         {
             ServerStateResponse response = parseServerStateResponse(body);
-            if (response == null || response.data == null || response.data.size() != SLOT_COUNT)
+            if (response == null || !response.success || !hasCompleteServerState(response.data))
             {
                 serverStateCheckPending = true;
                 serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
@@ -1828,6 +1955,40 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void reconcileWithServerState(List<ServerSlotState> serverRows)
     {
+        boolean stateMatches = compareAndMergeServerState(serverRows);
+        if (!stateMatches)
+        {
+            LOG.warn("Verschil tussen RuneLite en de webapp gevonden; volledige slotsnapshot wordt gestuurd");
+            boolean recoveryQueued = reconcileAllSlots(
+                "server_difference",
+                SnapshotSyncPolicy.ReconcileMode.ALWAYS) && snapshotPending;
+            serverStateCheckPending = !recoveryQueued;
+            if (!recoveryQueued)
+            {
+                serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
+                registerWorkerBackoff(serverStateNextAttemptAt);
+            }
+            return;
+        }
+
+        serverStateCheckPending = false;
+        if (manualSyncPending && SnapshotSyncPolicy.canFinishManualSync(
+            false,
+            snapshotPending,
+            snapshotInFlight,
+            outbox.isEmpty()))
+        {
+            finishManualSync();
+        }
+        debug("Lokale GE-slots en serverversies zijn gelijk");
+    }
+
+    private boolean compareAndMergeServerState(List<ServerSlotState> serverRows)
+    {
+        if (serverRows == null)
+        {
+            return false;
+        }
         Map<Integer, ServerSlotState> bySlot = new HashMap<>();
         for (ServerSlotState row : serverRows)
         {
@@ -1837,7 +1998,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
         }
 
-        boolean mismatch = bySlot.size() != SLOT_COUNT;
+        boolean mismatch = !hasCompleteServerState(serverRows);
         for (int slotNumber = 1; slotNumber <= SLOT_COUNT; slotNumber++)
         {
             ServerSlotState server = bySlot.get(slotNumber);
@@ -1851,19 +2012,26 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         persistCurrentAccount();
-        if (mismatch)
+        return !mismatch;
+    }
+
+    private static boolean hasCompleteServerState(List<ServerSlotState> rows)
+    {
+        return SnapshotSyncPolicy.isCompleteSlotSet(serverSlotNumbers(rows));
+    }
+
+    private static List<Integer> serverSlotNumbers(List<ServerSlotState> rows)
+    {
+        if (rows == null)
         {
-            LOG.warn("Verschil tussen RuneLite en de webapp gevonden; volledige slotsnapshot wordt gestuurd");
-            reconcileAllSlots("server_difference");
+            return Collections.emptyList();
         }
-        else
+        List<Integer> slotNumbers = new ArrayList<>(rows.size());
+        for (ServerSlotState row : rows)
         {
-            if (manualSyncPending)
-            {
-                finishManualSync();
-            }
-            debug("Lokale GE-slots en serverversies zijn gelijk");
+            slotNumbers.add(row == null ? null : row.slot_number);
         }
+        return slotNumbers;
     }
 
     private void finishManualSync()
@@ -1987,7 +2155,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         for (ServerSlotState row : rows)
         {
-            if (row == null)
+            if (row == null || row.slot_number < 1 || row.slot_number > SLOT_COUNT)
             {
                 continue;
             }
@@ -2189,6 +2357,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         snapshotPending = true;
         snapshotReason = "account_switch";
         serverStateCheckPending = true;
+        if (client.getGameState() == GameState.LOGGED_IN)
+        {
+            loginReconciliationPending = true;
+            loggedInTicks = 0;
+        }
         refreshSidePanel();
         requestMarketPrices(false);
         debug("Accountstatus geladen voor hash {}", accountKey());
@@ -4666,7 +4839,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final class ServerStateResponse
     {
         boolean success;
-        boolean reconcile_required;
+        Boolean reconcile_required;
         List<ServerSlotState> data;
         String state_digest;
         long aggregate_version;
