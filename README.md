@@ -1,6 +1,14 @@
-# OSRS Flipper Sync v5.2.25
+# OSRS Flipper Sync v5.2.26
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.26
+
+- Ontbrekende persoonlijke aantallen worden als `Niet beschikbaar` weergegeven; een echte nul (bijvoorbeeld een opgebruikte GE-buy limit) blijft nul. Wiki-prijsadvies blijft bruikbaar zonder een misleidende totale flipwinst van 0 GP.
+- Time-outs, serverfouten en onvolledige antwoorden verschijnen blijvend boven alle tabs, met de laatste succesvolle update en het aantal wachtende GE-events. Overviews, GE-updates, slotcontroles en verbindingscontroles herstellen onafhankelijk.
+- Een ongeldig overviewantwoord vervangt de laatste goede prijzen, statistieken en cashstack niet. Automatische retries gebruiken 15–300 seconden backoff; handmatige/focusrefreshes kunnen die niet omzeilen. GE-delta's en herstel-snapshots krijgen voorrang.
+- Een onvolledig GE-antwoord houdt het event veilig in de wachtrij. Een volledig, inhoudelijk geweigerd event wordt daarentegen niet eindeloos opnieuw verstuurd: het maakt plaats voor de gezaghebbende slotreconciliatie.
+- De snapshotoptimalisatie, live Wiki-prijzen, buy limits, slottimers en vijfminuten-prijstestreset blijven behouden.
 
 ## 5.2.25
 

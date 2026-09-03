@@ -70,6 +70,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final Map<String, JButton> tabButtons = new LinkedHashMap<>();
     private final List<OfferCard> offerCards = new ArrayList<>();
     private final JLabel statusValue = wrapLabel("", 158);
+    private final JLabel healthBanner = wrapLabel("", 158);
+    private String healthText = "";
     private final JLabel statsProfit = valueLabel("0 GP", GREEN, 15f);
     private final JLabel statsRoi = valueLabel("0,00%", Color.WHITE, DETAIL_FONT_SIZE);
     private final JLabel statsHourly = valueLabel("0 GP/u", GREEN, DETAIL_FONT_SIZE);
@@ -112,6 +114,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         header.add(title);
         header.add(Box.createVerticalStrut(5));
         header.add(createTabs());
+        healthBanner.setForeground(RED);
+        healthBanner.setFont(FontManager.getRunescapeFont().deriveFont(14f));
+        healthBanner.setAlignmentX(Component.LEFT_ALIGNMENT);
+        healthBanner.setVisible(false);
+        header.add(healthBanner);
         add(header, BorderLayout.NORTH);
 
         cards.setOpaque(false);
@@ -141,6 +148,23 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         SwingUtilities.invokeLater(() -> statusValue.setText(html(
             escapeHtml(status == null ? "Onbekende status" : status), 158)));
+    }
+
+    void updateHealth(String text)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            String next = text == null ? "" : text;
+            if (next.equals(healthText))
+            {
+                return;
+            }
+            healthText = next;
+            healthBanner.setText(html(escapeHtml(next).replace("\n", "<br>"), 158));
+            healthBanner.setVisible(!next.isEmpty());
+            revalidate();
+            repaint();
+        });
     }
 
     void updateOffers(List<FlipperOfferView> nextOffers)
@@ -446,7 +470,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void rebuildOpportunities()
     {
         opportunitiesList.removeAll();
-        if (overview.generatedAt <= 0 && overview.hourly.isEmpty() && overview.focus == null)
+        if (overview.generatedAt <= 0 && overview.hourly.isEmpty() && overview.focus == null &&
+            resolvedFocusedOpportunity == null)
         {
             opportunitiesList.add(emptyMessage("Persoonlijke flips worden opgehaald..."));
             opportunitiesList.revalidate();
@@ -528,8 +553,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             displayedSellPrice);
         JLabel profit = new JLabel(activeBuyOffer
             ? "Actief koopoffer"
-            : (activeSellOffer ? "Actief verkoopoffer" : formatGp(displayedCycleProfit)));
-        profit.setForeground(activeSellOffer
+            : (activeSellOffer ? "Actief verkoopoffer" : cycleProfitText(opportunity, displayedCycleProfit)));
+        profit.setForeground(!opportunity.hasQuantity() ? MUTED : activeSellOffer
             ? GOLD
             : (activeBuyOffer || displayedCycleProfit >= 0 ? GREEN : RED));
         profit.setFont(profit.getFont().deriveFont(Font.BOLD, 15f));
@@ -540,7 +565,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         boolean focusedCard = opportunity.itemId == focusedItemId;
         boolean buying = focusedCard && "buy".equals(focusedOfferSide);
         boolean selling = focusedCard && "sell".equals(focusedOfferSide);
-        card.add(compactMetric("Aantal", formatNumber(opportunity.effectiveMaximumQuantity())));
+        card.add(compactMetric("Aantal", quantityText(opportunity)));
         if (opportunity.hasBuyLimit())
         {
             card.add(compactMetric("Limiet gebruikt", buyLimitUsage(opportunity)));
@@ -588,6 +613,18 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             card.add(compactMetric("Winst/item", "—"));
         }
         return card;
+    }
+
+    static String quantityText(RuneliteOverviewView.Opportunity opportunity)
+    {
+        return opportunity == null || !opportunity.hasQuantity()
+            ? "Niet beschikbaar" : formatNumber(opportunity.effectiveMaximumQuantity());
+    }
+
+    static String cycleProfitText(RuneliteOverviewView.Opportunity opportunity, long profit)
+    {
+        return opportunity == null || !opportunity.hasQuantity()
+            ? "Alleen prijsadvies" : formatGp(profit);
     }
 
     static int displayedBuyPrice(
@@ -876,8 +913,14 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         JLabel icon = new JLabel();
         icon.setPreferredSize(new Dimension(32, 32));
         icon.setMinimumSize(new Dimension(32, 32));
-        AsyncBufferedImage image = itemManager.getImage(itemId);
-        image.addTo(icon);
+        if (itemManager != null)
+        {
+            AsyncBufferedImage image = itemManager.getImage(itemId);
+            if (image != null)
+            {
+                image.addTo(icon);
+            }
+        }
         return icon;
     }
 

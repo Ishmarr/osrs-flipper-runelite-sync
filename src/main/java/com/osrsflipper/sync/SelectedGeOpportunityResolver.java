@@ -157,7 +157,8 @@ final class SelectedGeOpportunityResolver
             instantSell,
             scannerOpportunity == null ? 0 : scannerOpportunity.expectedQuantity,
             scannerOpportunity == null ? 0 : scannerOpportunity.expectedProfit,
-            scannerOpportunity == null ? 0 : scannerOpportunity.maximumQuantity,
+            scannerOpportunity == null || !scannerOpportunity.hasQuantity()
+                ? -1 : scannerOpportunity.maximumQuantity,
             scannerOpportunity == null ? 0 : scannerOpportunity.maximumProfitPerHour,
             scannerOpportunity == null ? 0 : scannerOpportunity.maximumCycleProfit,
             priceUpdatedAt,

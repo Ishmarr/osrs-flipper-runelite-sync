@@ -79,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.25";
+    private static final String PLUGIN_VERSION = "5.2.26";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -163,6 +163,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private final GeItemPresenceBook geItemPresence = new GeItemPresenceBook();
     private final FlipCyclePlanBook flipCycles = new FlipCyclePlanBook();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
+    private final SyncHealthTracker syncHealth = new SyncHealthTracker();
 
     private long activeAccountHash = NO_ACCOUNT;
     private boolean started;
@@ -473,7 +474,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         overviewTicks++;
-        if (overviewTicks >= OVERVIEW_GAME_TICKS)
+        if (overviewTicks >= OVERVIEW_GAME_TICKS || overviewRefreshPending ||
+            (syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW) &&
+                now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW)))
         {
             requestOverview(false);
         }
@@ -487,6 +490,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         flushOutboxIfPossible();
         checkServerSlotStateIfPossible();
         flushMarketPriceQueue();
+        updateHealthPanel();
     }
 
     @Subscribe
@@ -860,6 +864,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     {
                         setConnectionStatus("Gekoppeld, Worker tijdelijk niet bereikbaar");
                     }
+                    healthFailure(SyncHealthTracker.Channel.STATUS, "netwerkfout/time-out");
                     debug("Apparaatstatus kon niet worden opgehaald; nieuwe poging na {} seconden: {}",
                         Math.max(0, statusNextAttemptAt - now()), exception.getMessage());
                 });
@@ -882,6 +887,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode >= 200 && statusCode < 300)
         {
             markWorkerSuccess();
+            healthSuccess(SyncHealthTracker.Channel.STATUS);
             statusCheckPending = false;
             statusRetryAttempts = 0;
             statusNextAttemptAt = 0;
@@ -924,8 +930,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             setConnectionStatus("Gekoppeld, statuscontrole kreeg HTTP " + statusCode);
         }
-        debug("Apparaatstatus kreeg HTTP {}; nieuwe poging na {} seconden: {}",
-            statusCode, Math.max(0, statusNextAttemptAt - now()), abbreviate(body, 300));
+        healthFailure(SyncHealthTracker.Channel.STATUS, "HTTP " + statusCode);
+        debug("Apparaatstatus kreeg HTTP {}; nieuwe poging na {} seconden",
+            statusCode, Math.max(0, statusNextAttemptAt - now()));
     }
 
     private void sendHeartbeat()
@@ -968,6 +975,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     heartbeatInFlight = false;
                     heartbeatNextAttemptAt = scheduleTransientRetry(++heartbeatRetryAttempts);
                     registerWorkerBackoff(heartbeatNextAttemptAt);
+                    healthFailure(SyncHealthTracker.Channel.HEARTBEAT, "netwerkfout/time-out");
                     debug("Heartbeat mislukt; nieuwe poging na {} seconden: {}",
                         Math.max(0, heartbeatNextAttemptAt - now()), exception.getMessage());
                 });
@@ -989,6 +997,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     else if (statusCode >= 200 && statusCode < 300)
                     {
                         markWorkerSuccess();
+                        healthSuccess(SyncHealthTracker.Channel.HEARTBEAT);
                         heartbeatRetryAttempts = 0;
                         heartbeatNextAttemptAt = 0;
                     }
@@ -996,8 +1005,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     {
                         heartbeatNextAttemptAt = scheduleTransientRetry(++heartbeatRetryAttempts);
                         registerWorkerBackoff(heartbeatNextAttemptAt);
-                        debug("Heartbeat kreeg HTTP {}; nieuwe poging na {} seconden: {}",
-                            statusCode, Math.max(0, heartbeatNextAttemptAt - now()), abbreviate(body, 250));
+                        healthFailure(SyncHealthTracker.Channel.HEARTBEAT, "HTTP " + statusCode);
+                        debug("Heartbeat kreeg HTTP {}; nieuwe poging na {} seconden",
+                            statusCode, Math.max(0, heartbeatNextAttemptAt - now()));
                     }
                 });
             }
@@ -1501,6 +1511,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (queued != null)
         {
             registerWorkerBackoff(queued.nextAttemptAt);
+            healthFailure(SyncHealthTracker.Channel.EVENTS, "netwerkfout/time-out");
         }
         LOG.warn("GE-synchronisatie mislukt; event blijft in de wachtrij: {}", exception.getMessage());
     }
@@ -1517,24 +1528,37 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         if (statusCode >= 200 && statusCode < 300)
         {
+            SyncResponse syncResponse = parseSyncResponse(responseText);
+            if (syncResponse == null || !syncResponse.isCompleteFor(eventId))
+            {
+                scheduleRetry(queued);
+                registerWorkerBackoff(queued.nextAttemptAt);
+                healthFailure(SyncHealthTracker.Channel.EVENTS, "ongeldig serverantwoord");
+                persistCurrentAccount();
+                return;
+            }
             markWorkerSuccess();
             outbox.removeFirst();
-            SyncResponse syncResponse = parseSyncResponse(responseText);
             if (successfulBuyLimitEvent(queued.event, syncResponse))
             {
                 outboxBatchBuyLimitDirty = true;
             }
-            applyServerSlotsFromResults(syncResponse == null ? null : syncResponse.results);
-            boolean rejected = syncResponse != null && syncResponse.summary != null &&
-                syncResponse.summary.rejected > 0;
-            if (rejected || responseText.contains("\"outcome\":\"rejected\""))
+            applyServerSlotsFromResults(syncResponse.results);
+            boolean rejected = syncResponse.summary.rejected > 0;
+            if (rejected)
             {
                 serverStateCheckPending = true;
-                LOG.warn("Worker heeft GE-event {} inhoudelijk geweigerd; reconciliatie volgt: {}",
-                    eventId, abbreviate(responseText, 500));
+                serverStateRetryAttempts = 0;
+                serverStateNextAttemptAt = 0;
+                healthFailure(SyncHealthTracker.Channel.EVENTS, "update geweigerd; herstelcontrole volgt");
+                LOG.warn("Worker heeft GE-event {} inhoudelijk geweigerd; reconciliatie volgt", eventId);
             }
             else
             {
+                if (!serverStateCheckPending)
+                {
+                    healthSuccess(SyncHealthTracker.Channel.EVENTS);
+                }
                 debug("GE-event {} door webapp ontvangen", eventId);
             }
             persistCurrentAccount();
@@ -1557,8 +1581,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
             persistCurrentAccount();
-            LOG.error("GE-event {} definitief geweigerd met HTTP {}: {}",
-                eventId, statusCode, abbreviate(responseText, 500));
+            healthFailure(SyncHealthTracker.Channel.EVENTS, "HTTP " + statusCode + "; herstelcontrole volgt");
+            LOG.error("GE-event {} definitief geweigerd met HTTP {}", eventId, statusCode);
             flushOutboxIfPossible();
             refreshOverviewAfterCompletedOutboxBatch();
             return;
@@ -1567,8 +1591,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         scheduleRetry(queued);
         registerWorkerBackoff(queued.nextAttemptAt);
         persistCurrentAccount();
-        LOG.warn("GE-synchronisatie kreeg HTTP {}; nieuwe poging volgt. {}",
-            statusCode, abbreviate(responseText, 300));
+        healthFailure(SyncHealthTracker.Channel.EVENTS, "HTTP " + statusCode);
+        LOG.warn("GE-synchronisatie kreeg HTTP {}; nieuwe poging volgt", statusCode);
     }
 
     private void sendFullSnapshotIfPossible()
@@ -1672,6 +1696,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         serverStateCheckPending = true;
         if (pendingSnapshot != null && Objects.equals(pendingSnapshot.snapshotId, snapshotId))
         {
+            healthFailure(SyncHealthTracker.Channel.STATE, "netwerkfout/time-out");
             if (snapshotDirty)
             {
                 pendingSnapshot = null;
@@ -1730,9 +1755,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 if (stateMatches)
                 {
                     serverStateCheckPending = false;
+                    healthSuccess(SyncHealthTracker.Channel.STATE);
+                    if (outbox.isEmpty())
+                    {
+                        healthSuccess(SyncHealthTracker.Channel.EVENTS);
+                    }
                 }
                 else
                 {
+                    healthFailure(SyncHealthTracker.Channel.STATE, "slotverschil; herstel actief");
                     LOG.warn("Slotsnapshot wijkt af van de actuele RuneLite-slots; herstelsnapshot wordt gestuurd");
                     boolean recoveryQueued = snapshotPending;
                     if (!recoveryQueued)
@@ -1750,6 +1781,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 // de aparte /state-controle vervangen.
                 applyServerStateRows(stateResponse.data);
                 serverStateCheckPending = true;
+                healthFailure(SyncHealthTracker.Channel.STATE, "onvolledig antwoord; controle volgt");
             }
 
             persistCurrentAccount();
@@ -1784,6 +1816,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode == 409 ||
             (stateResponse != null && Boolean.TRUE.equals(stateResponse.reconcile_required)))
         {
+            healthFailure(SyncHealthTracker.Channel.STATE, "slotconflict; herstel actief");
             applyServerStateRows(stateResponse == null ? null : stateResponse.data);
             pendingSnapshot = null;
             snapshotPending = snapshotDirty;
@@ -1800,8 +1833,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 setConnectionStatus("Synchronisatie controleren...");
             }
-            LOG.warn("Slotsnapshot conflicteerde met een nieuwere servertoestand; automatische reconciliatie volgt: {}",
-                abbreviate(body, 400));
+            LOG.warn("Slotsnapshot conflicteerde met een nieuwere servertoestand; automatische reconciliatie volgt");
             flushOutboxIfPossible();
             checkServerSlotStateIfPossible();
             return;
@@ -1821,7 +1853,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 manualSyncPending = false;
                 setConnectionStatus("Synchronisatie mislukt: Worker gaf HTTP " + statusCode);
             }
-            LOG.error("Slotsnapshot definitief geweigerd met HTTP {}: {}", statusCode, abbreviate(body, 500));
+            healthFailure(SyncHealthTracker.Channel.STATE, "HTTP " + statusCode + "; controle volgt");
+            LOG.error("Slotsnapshot definitief geweigerd met HTTP {}", statusCode);
             return;
         }
 
@@ -1843,8 +1876,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             setConnectionStatus("Synchronisatie tijdelijk mislukt; automatische nieuwe poging volgt...");
         }
-        LOG.warn("Volledige GE-slotsnapshot kreeg HTTP {}; automatische nieuwe poging volgt. {}",
-            statusCode, abbreviate(body, 400));
+        healthFailure(SyncHealthTracker.Channel.STATE,
+            statusCode >= 200 && statusCode < 300 ? "ongeldig serverantwoord" : "HTTP " + statusCode);
+        LOG.warn("Volledige GE-slotsnapshot kreeg HTTP {}; automatische nieuwe poging volgt", statusCode);
         flushOutboxIfPossible();
     }
 
@@ -1894,6 +1928,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     {
                         setConnectionStatus("Synchronisatie controleren; Worker tijdelijk niet bereikbaar...");
                     }
+                    healthFailure(SyncHealthTracker.Channel.STATE, "netwerkfout/time-out");
                     debug("Server-slotversies konden niet worden opgehaald; nieuwe poging na {} seconden: {}",
                         Math.max(0, serverStateNextAttemptAt - now()), exception.getMessage());
                 });
@@ -1925,6 +1960,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 {
                     setConnectionStatus("Synchronisatie controleren; onvolledig serverantwoord...");
                 }
+                healthFailure(SyncHealthTracker.Channel.STATE, "onvolledig serverantwoord");
                 LOG.warn("Server gaf geen volledige acht-slotstoestand terug; nieuwe poging na {} seconden",
                     Math.max(0, serverStateNextAttemptAt - now()));
                 return;
@@ -1949,8 +1985,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             setConnectionStatus("Synchronisatie controleren; Worker gaf HTTP " + statusCode + "...");
         }
-        debug("Server-slotversiecontrole kreeg HTTP {}; nieuwe poging na {} seconden: {}",
-            statusCode, Math.max(0, serverStateNextAttemptAt - now()), abbreviate(body, 300));
+        healthFailure(SyncHealthTracker.Channel.STATE, "HTTP " + statusCode);
+        debug("Server-slotversiecontrole kreeg HTTP {}; nieuwe poging na {} seconden",
+            statusCode, Math.max(0, serverStateNextAttemptAt - now()));
     }
 
     private void reconcileWithServerState(List<ServerSlotState> serverRows)
@@ -1958,6 +1995,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         boolean stateMatches = compareAndMergeServerState(serverRows);
         if (!stateMatches)
         {
+            healthFailure(SyncHealthTracker.Channel.STATE, "slotverschil; herstel actief");
             LOG.warn("Verschil tussen RuneLite en de webapp gevonden; volledige slotsnapshot wordt gestuurd");
             boolean recoveryQueued = reconcileAllSlots(
                 "server_difference",
@@ -1979,6 +2017,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             outbox.isEmpty()))
         {
             finishManualSync();
+        }
+        healthSuccess(SyncHealthTracker.Channel.STATE);
+        if (outbox.isEmpty() && !snapshotPending)
+        {
+            healthSuccess(SyncHealthTracker.Channel.EVENTS);
         }
         debug("Lokale GE-slots en serverversies zijn gelijk");
     }
@@ -2513,11 +2556,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
         serverStateNextAttemptAt = 0;
         workerBackoffUntil = 0;
         setConnectionStatus(status);
+        healthFailure(SyncHealthTracker.Channel.CONNECTION, "ongeldig of ingetrokken");
         LOG.warn("RuneLite-apparaatkoppeling is niet langer geldig");
     }
 
     private void invalidateOverviewContext()
     {
+        syncHealth.clear();
+        updateHealthPanel();
         overviewContextGeneration++;
         overviewRequestGeneration++;
         overviewInFlight = false;
@@ -2534,6 +2580,27 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (panel != null)
         {
             panel.setConnectionStatus(status);
+        }
+    }
+
+    private void healthFailure(SyncHealthTracker.Channel channel, String safeReason)
+    {
+        syncHealth.fail(channel, safeReason, now());
+        LOG.warn("{}: {}; automatische herstelcontrole blijft actief", channel.label, safeReason);
+        updateHealthPanel();
+    }
+
+    private void healthSuccess(SyncHealthTracker.Channel channel)
+    {
+        syncHealth.succeed(channel, now());
+        updateHealthPanel();
+    }
+
+    private void updateHealthPanel()
+    {
+        if (panel != null)
+        {
+            panel.updateHealth(syncHealth.banner(outbox.size()));
         }
     }
 
@@ -2566,6 +2633,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             focusedGeItemId,
             focusedGeSide);
         panel.updateFocusedItem(focusedGeItemId, focusedGeSide, focused.opportunity);
+        updateHealthPanel();
     }
 
     private void resetSessionStats()
@@ -2678,6 +2746,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             return;
         }
+        // Handmatige/focusrefresh omzeilt de foutbackoff niet. Eerst GE-delta's
+        // afleveren; de onafhankelijke Wiki-prijsaanvragen blijven beschikbaar.
+        if (now() < syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW) ||
+            now() < workerBackoffUntil || requestInFlight || snapshotInFlight ||
+            !outbox.isEmpty() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))
+        {
+            overviewRefreshPending = true;
+            overviewFreshMarketPending |= freshMarket;
+            overviewFreshBuyLimitsPending |= freshBuyLimits;
+            return;
+        }
         if (overviewInFlight)
         {
             if (force)
@@ -2700,6 +2779,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             return;
         }
+
+        freshMarket |= overviewFreshMarketPending;
+        freshBuyLimits |= overviewFreshBuyLimitsPending;
+        overviewRefreshPending = false;
+        overviewFreshMarketPending = false;
+        overviewFreshBuyLimitsPending = false;
 
         ZoneId zone = ZoneId.systemDefault();
         LocalDate today = LocalDate.now(zone);
@@ -2727,6 +2812,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 clientThread.invokeLater(() ->
                 {
+                    if (!isCurrentOverviewRequest(requestAccountHash, requestGeneration,
+                        requestContextGeneration, activeAccountHash, overviewRequestGeneration,
+                        overviewContextGeneration, overviewInFlight))
+                    {
+                        return;
+                    }
+                    healthFailure(SyncHealthTracker.Channel.OVERVIEW, "netwerkfout/time-out");
                     debug("RuneLite-kansen konden niet worden opgehaald: {}", exception.getMessage());
                     finishOverviewRequest(
                         requestAccountHash,
@@ -2783,7 +2875,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         if (statusCode < 200 || statusCode >= 300)
         {
-            debug("RuneLite-kansen kregen HTTP {}: {}", statusCode, abbreviate(body, 300));
+            healthFailure(SyncHealthTracker.Channel.OVERVIEW, "HTTP " + statusCode);
             finishOverviewRequest(
                 requestAccountHash,
                 requestGeneration,
@@ -2794,9 +2886,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
         try
         {
             OverviewResponse response = gson.fromJson(body, OverviewResponse.class);
-            if (response == null || !response.success)
+            if (response == null || !response.isComplete())
             {
-                throw new IllegalArgumentException("success ontbreekt");
+                throw new IllegalArgumentException("onvolledig overviewantwoord");
             }
             overview = response.toView();
             Map<Integer, Long> advancedPriceTombstones =
@@ -2814,6 +2906,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             refreshOpenFlipSellGuidance();
             persistCurrentAccount();
             markWorkerSuccess();
+            healthSuccess(SyncHealthTracker.Channel.OVERVIEW);
             if (panel != null)
             {
                 refreshSidePanel();
@@ -2824,6 +2917,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         catch (RuntimeException exception)
         {
+            healthFailure(SyncHealthTracker.Channel.OVERVIEW, "ongeldig/onvolledig serverantwoord");
             debug("RuneLite-kansen konden niet worden gelezen: {}", exception.getMessage());
         }
         finally
@@ -2852,7 +2946,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
         overviewInFlight = false;
-        if (overviewRefreshPending)
+        if (overviewRefreshPending && now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW))
         {
             boolean freshMarket = overviewFreshMarketPending;
             boolean freshBuyLimits = overviewFreshBuyLimitsPending;
@@ -4338,6 +4432,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static String readResponseBody(Response response)
     {
+        if (!response.isSuccessful())
+        {
+            LOG.warn("HTTP {} op {}; trace={}", response.code(),
+                response.request().url().encodedPath(),
+                safeTraceId(response.header("X-Runelite-Trace-Id")));
+        }
         try
         {
             ResponseBody body = response.body();
@@ -4353,6 +4453,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         String owner = trim(value);
         return owner.isEmpty() ? "jouw webappaccount" : owner;
+    }
+
+    static String safeTraceId(String value)
+    {
+        return value != null && value.matches("[A-Za-z0-9_.:-]{1,80}") ? value : "niet beschikbaar";
     }
 
     private void debug(String message, Object... arguments)
@@ -4415,6 +4520,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         OverviewStats stats;
         List<PriceTestData> price_tests;
         CashData cash;
+
+        boolean isComplete()
+        {
+            return success && generated_at > 0 && opportunities != null &&
+                opportunities.hourly != null && stats != null && stats.today != null &&
+                stats.month != null && stats.total != null && stats.today.isComplete() &&
+                stats.month.isComplete() && stats.total.isComplete() && cash != null &&
+                cash.isComplete() && price_tests != null;
+        }
 
         RuneliteOverviewView toView()
         {
@@ -4526,7 +4640,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         int instant_sell;
         int expected_quantity;
         long expected_profit;
-        int maximum_quantity;
+        Integer maximum_quantity;
         int official_buy_limit;
         int used_buy_limit;
         int remaining_buy_limit;
@@ -4546,7 +4660,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 instant_sell,
                 expected_quantity,
                 expected_profit,
-                maximum_quantity,
+                maximum_quantity == null ? -1 : maximum_quantity,
                 maximum_profit_per_hour,
                 maximum_cycle_profit,
                 price_updated_at,
@@ -4565,13 +4679,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static final class PeriodStatsData
     {
-        long realized_profit;
-        double roi_percent;
-        long profit_per_hour;
-        long ge_tax;
-        long trading_volume;
-        int completed_flips;
+        Long realized_profit;
+        Double roi_percent;
+        Long profit_per_hour;
+        Long ge_tax;
+        Long trading_volume;
+        Integer completed_flips;
         List<PeriodItemData> items;
+
+        boolean isComplete()
+        {
+            return realized_profit != null && roi_percent != null && Double.isFinite(roi_percent) &&
+                profit_per_hour != null && ge_tax != null && trading_volume != null &&
+                completed_flips != null && items != null;
+        }
     }
 
     private static final class PeriodItemData
@@ -4605,10 +4726,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static final class CashData
     {
-        long available;
-        long reserved;
-        long available_plus_reserved;
-        long updated_at;
+        Long available;
+        Long reserved;
+        Long available_plus_reserved;
+        Long updated_at;
+
+        boolean isComplete()
+        {
+            return available != null && reserved != null && available_plus_reserved != null && updated_at != null;
+        }
 
         RuneliteOverviewView.CashBalance toView()
         {
@@ -4816,9 +4942,32 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static final class SyncResponse
     {
-        boolean success;
+        Boolean success;
         SyncSummary summary;
         List<SyncResult> results;
+
+        boolean isCompleteFor(String eventId)
+        {
+            if (success == null || summary == null || summary.received != 1 ||
+                results == null || results.size() != 1)
+            {
+                return false;
+            }
+            SyncResult result = results.get(0);
+            if (result == null || !Objects.equals(eventId, result.event_id))
+            {
+                return false;
+            }
+            // A semantic rejection is a complete terminal acknowledgement,
+            // not a transport failure: retrying its immutable event ID would
+            // permanently block the FIFO and the reconciliation snapshot.
+            if ("rejected".equals(result.outcome))
+            {
+                return !success && summary.rejected == 1;
+            }
+            return success && summary.rejected == 0 &&
+                ("applied".equals(result.outcome) || "duplicate".equals(result.outcome));
+        }
     }
 
     private static final class SyncSummary
@@ -4831,6 +4980,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private static final class SyncResult
     {
+        String event_id;
         String outcome;
         String classification;
         ServerSlotState slot;

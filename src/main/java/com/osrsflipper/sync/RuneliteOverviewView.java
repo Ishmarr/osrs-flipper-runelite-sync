@@ -147,6 +147,7 @@ final class RuneliteOverviewView
         final int usedBuyLimit;
         final int remainingBuyLimit;
         private final boolean buyLimitAvailable;
+        private final boolean quantityAvailable;
 
         Opportunity(
             int itemId,
@@ -243,6 +244,7 @@ final class RuneliteOverviewView
             this.instantSell = Math.max(0, instantSell);
             this.expectedQuantity = Math.max(0, expectedQuantity);
             this.expectedProfit = Math.max(0, expectedProfit);
+            this.quantityAvailable = maximumQuantity >= 0;
             this.maximumQuantity = Math.max(0, maximumQuantity);
             this.maximumProfitPerHour = Math.max(0, maximumProfitPerHour);
             this.maximumCycleProfit = Math.max(0, maximumCycleProfit);
@@ -266,6 +268,11 @@ final class RuneliteOverviewView
         boolean hasBuyLimit()
         {
             return buyLimitAvailable;
+        }
+
+        boolean hasQuantity()
+        {
+            return quantityAvailable;
         }
 
         int effectiveMaximumQuantity()
