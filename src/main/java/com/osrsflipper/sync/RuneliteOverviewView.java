@@ -292,6 +292,8 @@ final class RuneliteOverviewView
         final long tradingVolume;
         final int completedFlips;
         final List<PeriodItem> items;
+        final boolean attributionComplete;
+        final String attributionError;
 
         PeriodStats(
             long realizedProfit,
@@ -314,6 +316,21 @@ final class RuneliteOverviewView
             int completedFlips,
             List<PeriodItem> items)
         {
+            this(realizedProfit, roiPercent, profitPerHour, geTax, tradingVolume,
+                completedFlips, items, true, "");
+        }
+
+        PeriodStats(
+            long realizedProfit,
+            double roiPercent,
+            long profitPerHour,
+            long geTax,
+            long tradingVolume,
+            int completedFlips,
+            List<PeriodItem> items,
+            boolean attributionComplete,
+            String attributionError)
+        {
             this.realizedProfit = realizedProfit;
             this.roiPercent = Double.isFinite(roiPercent) ? roiPercent : 0;
             this.profitPerHour = profitPerHour;
@@ -321,6 +338,11 @@ final class RuneliteOverviewView
             this.tradingVolume = Math.max(0, tradingVolume);
             this.completedFlips = Math.max(0, completedFlips);
             this.items = immutableItems(items);
+            this.attributionComplete = attributionComplete;
+            String reason = attributionError == null ? "" : attributionError.trim();
+            this.attributionError = reason.isEmpty() && !attributionComplete
+                ? "Onvoldoende historische verkoopgegevens om deze periode betrouwbaar te verdelen."
+                : reason;
         }
 
         static PeriodStats empty()

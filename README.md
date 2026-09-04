@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.27
+# OSRS Flipper Sync v5.2.28
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.28
+
+- Een statistiekperiode die de server niet betrouwbaar over historische verkoopmomenten kan verdelen, toont een duidelijke reden en streepjes in plaats van misleidende nulwaarden of oude itemresultaten.
+- Vandaag, Deze maand en Totaal worden afzonderlijk beoordeeld. Omschakelen naar een beschikbare periode herstelt direct de bijbehorende resultaten; cashstack, kansen en synchronisatie blijven beschikbaar.
+- Antwoorden van eerdere Worker-versies zonder de nieuwe beschikbaarheidsvelden blijven compatibel. De veilige hoeveelheidsknop uit 5.2.27 blijft behouden.
 
 ## 5.2.27
 

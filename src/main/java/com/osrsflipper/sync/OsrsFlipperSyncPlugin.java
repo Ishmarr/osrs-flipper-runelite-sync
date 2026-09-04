@@ -79,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.27";
+    private static final String PLUGIN_VERSION = "5.2.28";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -4641,6 +4641,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         private static RuneliteOverviewView.PeriodStats periodView(PeriodStatsData row)
         {
+            if (row != null && Boolean.FALSE.equals(row.attribution_complete))
+            {
+                // Een expliciet onbetrouwbare periode is geen kapotte overview.
+                // Negeer eventuele gedeeltelijke cijfers zonder de andere data te blokkeren.
+                return new RuneliteOverviewView.PeriodStats(
+                    0, 0, 0, 0, 0, 0, Collections.emptyList(), false, row.attribution_error);
+            }
             return row == null
                 ? RuneliteOverviewView.PeriodStats.empty()
                 : new RuneliteOverviewView.PeriodStats(
@@ -4739,10 +4746,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         Long trading_volume;
         Integer completed_flips;
         List<PeriodItemData> items;
+        Boolean attribution_complete;
+        String attribution_error;
 
         boolean isComplete()
         {
-            return realized_profit != null && roi_percent != null && Double.isFinite(roi_percent) &&
+            return Boolean.FALSE.equals(attribution_complete) ||
+                realized_profit != null && roi_percent != null && Double.isFinite(roi_percent) &&
                 profit_per_hour != null && ge_tax != null && trading_volume != null &&
                 completed_flips != null && items != null;
         }

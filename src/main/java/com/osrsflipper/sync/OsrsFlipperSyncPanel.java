@@ -797,8 +797,24 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         PeriodChoice selected = (PeriodChoice) statsPeriod.getSelectedItem();
         RuneliteOverviewView.PeriodStats stats = overview.statsFor(selected == null ? "today" : selected.key);
+        if (!stats.attributionComplete)
+        {
+            for (JLabel value : new JLabel[] {statsProfit, statsRoi, statsHourly, statsTax, statsVolume, statsFlips})
+            {
+                value.setText("—");
+                value.setForeground(MUTED);
+            }
+            statsItemsList.removeAll();
+            statsItemsList.add(emptyMessage("Statistieken niet beschikbaar: " + stats.attributionError));
+            statsItemsList.revalidate();
+            statsItemsList.repaint();
+            return;
+        }
         statsProfit.setText(formatSignedGp(stats.realizedProfit));
         statsProfit.setForeground(stats.realizedProfit < 0 ? RED : GREEN);
+        statsTax.setForeground(Color.WHITE);
+        statsVolume.setForeground(Color.WHITE);
+        statsFlips.setForeground(Color.WHITE);
         statsRoi.setText(String.format(Locale.US, "%.2f%%", stats.roiPercent).replace('.', ','));
         statsRoi.setForeground(stats.roiPercent < 0 ? RED : Color.WHITE);
         statsHourly.setText(formatSignedGp(stats.profitPerHour) + "/u");
