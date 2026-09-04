@@ -79,7 +79,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.26";
+    private static final String PLUGIN_VERSION = "5.2.27";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -3216,6 +3216,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         final Widget priceSuggestion = suggestion;
         final int selectedPrice = price;
+        priceSuggestion.setHidden(false);
         String label = "buy".equals(side) ? "Koopprijs" : "Verkoopprijs";
         priceSuggestion.setText(PRICE_EDITOR_PREFIX + label + ": " +
             String.format(java.util.Locale.US, "%,d", selectedPrice) + " gp");
@@ -3245,17 +3246,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (!isVisible(prompt) || parent == null || !isVisible(setup) ||
             !"How many do you wish to buy?".equals(prompt.getText()))
         {
+            hideEditorSuggestion(parent, true);
             return;
         }
 
-        int itemId = Math.max(0, client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH));
-        if (itemId <= 0)
-        {
-            itemId = Math.max(0, focusedGeItemId);
-        }
+        int itemId = quantityEditorItemId();
         int quantity = overview.maximumQuantityForItem(itemId);
-        if (quantity <= 0)
+        if (quantity <= 0 || !"buy".equals(
+            FocusedGeItemResolver.resolveSide(true, widgetTreeText(setup), false, null)))
         {
+            hideEditorSuggestion(parent, false);
             return;
         }
 
@@ -3269,6 +3269,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         final Widget quantitySuggestion = suggestion;
         final int selectedQuantity = quantity;
+        quantitySuggestion.setHidden(false);
         quantitySuggestion.setText(QUANTITY_EDITOR_PREFIX +
             String.format(java.util.Locale.US, "%,d", selectedQuantity));
         quantitySuggestion.setTextColor(0xFF981F);
@@ -3288,8 +3289,39 @@ public class OsrsFlipperSyncPlugin extends Plugin
         quantitySuggestion.setOnMouseLeaveListener((JavaScriptCallback) ev ->
             quantitySuggestion.setTextColor(0xFF981F));
         quantitySuggestion.setOnOpListener((JavaScriptCallback) ev ->
-            applyGeEditorValue(selectedQuantity));
+            applyCurrentGeQuantity(itemId));
         quantitySuggestion.revalidate();
+    }
+
+    private int quantityEditorItemId()
+    {
+        Widget setupItem = client.getWidget(InterfaceID.GeOffers.SETUP_GRAPHIC4);
+        return FocusedGeItemResolver.priceEditorItemId(
+            setupItem == null ? 0 : setupItem.getItemId(),
+            focusedGeItemId,
+            client.getVarpValue(VarPlayerID.TRADINGPOST_SEARCH));
+    }
+
+    private void applyCurrentGeQuantity(int expectedItemId)
+    {
+        Widget prompt = client.getWidget(InterfaceID.Chatbox.MES_TEXT);
+        Widget parent = client.getWidget(InterfaceID.Chatbox.MES_LAYER);
+        Widget setup = client.getWidget(InterfaceID.GeOffers.SETUP);
+        if (!isVisible(prompt) || !isVisible(setup) ||
+            !"How many do you wish to buy?".equals(prompt.getText()) ||
+            !"buy".equals(FocusedGeItemResolver.resolveSide(true, widgetTreeText(setup), false, null)) ||
+            expectedItemId <= 0 || quantityEditorItemId() != expectedItemId)
+        {
+            hideEditorSuggestion(parent, true);
+            return;
+        }
+        int quantity = overview.maximumQuantityForItem(expectedItemId);
+        if (quantity <= 0)
+        {
+            hideEditorSuggestion(parent, true);
+            return;
+        }
+        applyGeEditorValue(quantity);
     }
 
     private int gePriceEditorPrice(int itemId, String side)
@@ -3380,6 +3412,27 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static Widget findPriceEditorSuggestion(Widget parent)
     {
         return findEditorSuggestion(parent, PRICE_EDITOR_PREFIX);
+    }
+
+    private static void hideEditorSuggestion(Widget parent, boolean quantityOnly)
+    {
+        if (parent == null)
+        {
+            return;
+        }
+        Widget suggestion = findPriceEditorSuggestion(parent);
+        if (suggestion == null || (quantityOnly &&
+            !suggestion.getText().startsWith(QUANTITY_EDITOR_PREFIX)))
+        {
+            return;
+        }
+        suggestion.setHidden(true);
+        suggestion.clearActions();
+        suggestion.setOnOpListener((Object[]) null);
+        suggestion.setOnMouseRepeatListener((Object[]) null);
+        suggestion.setOnMouseLeaveListener((Object[]) null);
+        suggestion.setHasListener(false);
+        suggestion.revalidate();
     }
 
     private static Widget findEditorSuggestion(Widget parent, String prefix)

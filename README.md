@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.26
+# OSRS Flipper Sync v5.2.27
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.27
+
+- Een aanbevolen aantal dat tijdens een geopend GE-invoervenster nul of onbekend wordt, verdwijnt onmiddellijk en is niet meer aanklikbaar. Een later geldig aantal of prijsadvies maakt dezelfde hulpregel weer zichtbaar.
+- De hoeveelheidsknop controleert bij iedere klik opnieuw het huidige item, de koopcontext en het nieuwste aantal, zodat een vertraagde klik geen verouderde hoeveelheid overneemt.
+- Handmatige invoer, widgets van andere plugins, lopende offers, vastgelegde prijsadviezen en synchronisatie blijven ongemoeid.
 
 ## 5.2.26
 
