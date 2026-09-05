@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.33
+# OSRS Flipper Sync v5.2.34
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.34 — Sneller herstel van marktprijzen
+
+- De server kan tijdens herstel een nieuwe controle na 15 seconden adviseren. De plugin volgt dit begrensd tussen 15 en 60 seconden; gezonde overzichten blijven eenmaal per minuut verversen. Itemselecties verschuiven de klok van de volledige lijst niet.
+- Een mislukte handmatige verversing bewaart haar intentie bij een retry, met dezelfde coordinator en backoff. Automatische controles forceren geen brede Wiki-downloads.
+- Worker 99.0.4 neemt afgeronde achtergrondupdates direct over in het flipoverzicht. Oude caches krijgen geen nieuwe ophaaltijd; mapping en uurvolumes behouden hun eigen cachetermijn.
+- Regressies controleren veranderde prijzen tot in het paneel, begrensde verzoekaantallen en herstel na fouten. Cloudflare Free voor twee gebruikers blijft de randvoorwaarde.
 
 ## 5.2.33 — P3-auditfixes
 

@@ -10,6 +10,7 @@ final class WorkerOverviewResponse
     private boolean success;
     private long generated_at;
     private long market_generated_at;
+    private Integer refresh_after_seconds;
     private OpportunityLists opportunities;
     private OverviewStats stats;
     private List<PriceTestData> price_tests;
@@ -43,6 +44,11 @@ final class WorkerOverviewResponse
     {
         return itemId <= 0 || opportunities == null || opportunities.focus == null ||
             opportunities.focus.item_id == itemId;
+    }
+
+    int refreshAfterSeconds()
+    {
+        return refresh_after_seconds == null ? 60 : Math.max(15, Math.min(60, refresh_after_seconds));
     }
 
     boolean opportunitiesAvailable()

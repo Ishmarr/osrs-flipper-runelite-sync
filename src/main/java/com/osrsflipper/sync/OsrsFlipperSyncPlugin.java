@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.33";
+    private static final String PLUGIN_VERSION = "5.2.34";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -244,6 +244,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private PendingCashUpdate cashInFlightUpdate;
     private boolean workerPumpActive;
     private int overviewTicks;
+    private int overviewRefreshGameTicks = OVERVIEW_GAME_TICKS;
     private int forcedOverviewDelayTicks;
     private int focusedGeItemId;
     private String focusedGeItemName = "";
@@ -609,7 +610,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         overviewTicks++;
-        if (overviewTicks >= OVERVIEW_GAME_TICKS || overviewRefreshPending ||
+        if (overviewTicks >= overviewRefreshGameTicks || overviewRefreshPending ||
             (syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW) &&
                 now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW)))
         {
@@ -3432,6 +3433,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewInFlightFreshMarket = false;
         overviewInFlightFreshBuyLimits = false;
         outboxBatchBuyLimitDirty = false;
+        overviewRefreshGameTicks = OVERVIEW_GAME_TICKS;
     }
 
     private void setConnectionStatus(String value)
@@ -3629,6 +3631,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
     }
 
+    private void rememberFailedOverviewRequest(int focusItemId)
+    {
+        // Replay only the intent of the failed request. Ordinary background
+        // refreshes never become forced upstream requests through recovery.
+        rememberOverviewRequest(focusItemId, overviewInFlightFreshMarket, overviewInFlightFreshBuyLimits);
+    }
+
     private void requestOverviewForScope(boolean force, boolean freshMarket, boolean freshBuyLimits, int focusItemId)
     {
         if (!started || pairingInFlight || !hasDeviceToken())
@@ -3722,7 +3731,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     if (focusItemId == 0 || focusItemId == focusedGeItemId)
                     {
                         healthFailure(channel, "netwerkfout/time-out");
-                        rememberOverviewRequest(focusItemId, false, false);
+                        rememberFailedOverviewRequest(focusItemId);
                     }
                     debug("RuneLite-kansen konden niet worden opgehaald: {}", exception.getMessage());
                     finishOverviewRequest(
@@ -3800,7 +3809,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode < 200 || statusCode >= 300)
         {
             healthFailure(channel, "HTTP " + statusCode);
-            rememberOverviewRequest(requestFocusItemId, false, false);
+            rememberFailedOverviewRequest(requestFocusItemId);
             finishOverviewRequest(
                 requestAccountHash,
                 requestGeneration,
@@ -3818,6 +3827,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (!response.matchesFocusItem(requestFocusItemId))
                 throw new IllegalArgumentException("focusantwoord hoort bij een ander item");
             overview = response.toView(overview, requestFocusItemId);
+            if (requestFocusItemId == 0)
+            {
+                // A server can refresh expired public resources in the
+                // background. Revisit its resulting snapshot promptly, without
+                // forcing another upstream download. Focus replies do not
+                // alter this full-list clock; long requests start it on receipt.
+                overviewRefreshGameTicks = (response.refreshAfterSeconds() * 5 + 2) / 3;
+                overviewTicks = 0;
+            }
             if (requestFocusItemId == 0 && response.topOpportunitiesAvailable() && focusedGeItemId > 0)
             {
                 // A full scan may omit the selected item. Refresh its small,
@@ -3872,7 +3890,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         catch (RuntimeException exception)
         {
             healthFailure(channel, "ongeldig/onvolledig serverantwoord");
-            rememberOverviewRequest(requestFocusItemId, false, false);
+            rememberFailedOverviewRequest(requestFocusItemId);
             debug("RuneLite-kansen konden niet worden gelezen: {}", exception.getMessage());
         }
         finally
@@ -3902,6 +3920,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         overviewInFlight = false;
         overviewInFlightFocusItemId = 0;
+        overviewInFlightFreshMarket = false;
+        overviewInFlightFreshBuyLimits = false;
         // finishWorkerRequest pumps the next request after this callback. Keep
         // cash and GE delivery ahead of any queued full or focused refresh.
     }

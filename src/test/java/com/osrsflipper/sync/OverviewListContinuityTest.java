@@ -587,6 +587,172 @@ public class OverviewListContinuityTest
         }
     }
 
+    @Test
+    public void serverAdviceRechecksUsableStaleRowsAndRendersChangedFreshPrices() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.requestFull(true).respond(pricedPayload(15, NOW - 3600, NOW - 600, true, 123, 456));
+            h.drain();
+            assertTrue(h.view().marketAvailable);
+            assertTrue(h.view().marketStale);
+            assertTrue(h.renderedPanelText().contains("Marktprijzen zijn verouderd"));
+            h.enableGameTicks();
+            h.ticks(24);
+            assertEquals(1, h.overviewCalls().size());
+            h.ticks(1);
+            assertEquals("Fifteen seconds of game ticks follow the server advice", 2, h.overviewCalls().size());
+            TestCall refresh = h.overviewCalls().get(1);
+            assertNull(refresh.request.url().queryParameter("fresh_market"));
+            assertNull(refresh.request.url().queryParameter("focus_item_id"));
+            h.ticks(50);
+            assertEquals("A slow public-cache refresh cannot queue duplicate full scans", 2, h.overviewCalls().size());
+
+            // The Worker has now completed its background refresh. Cache reuse
+            // is valid: new prices, source snapshot time and trade time are
+            // independent evidence, not just a newly generated response clock.
+            refresh.respond(pricedPayload(60, NOW, NOW - 120, false, 12345, 12999));
+            h.drain();
+            assertEquals(12345, h.view().hourly.get(0).buyPrice);
+            assertEquals(NOW, h.view().generatedAt);
+            assertEquals(NOW - 120, h.view().hourly.get(0).priceUpdatedAt);
+            String rendered = h.renderedPanelText();
+            assertTrue(rendered.contains("12 345 gp"));
+            assertFalse(rendered.contains("Marktprijzen zijn verouderd"));
+            assertFalse(h.view().marketStale);
+            h.ticks(99);
+            assertEquals("The next full interval starts when the slow reply arrives", 2, h.overviewCalls().size());
+            h.ticks(1);
+            assertEquals(3, h.overviewCalls().size());
+            assertNull(h.overviewCalls().get(2).request.url().queryParameter("fresh_market"));
+        }
+    }
+
+    @Test
+    public void focusedResponseCannotReplaceTheServerAdvisedGlobalRefreshClock() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.requestFull(true).respond(pricedPayload(15, NOW, NOW - 60, false, 101, 249));
+            h.drain();
+            h.enableGameTicks();
+            h.ticks(10);
+            h.focus(FOCUS);
+            // This focused response asks for a minute, but it does not own the
+            // full-list clock and must not postpone its fifteen-second update.
+            h.requestFocus(FOCUS).respond(payload(new ArrayList<>(), FOCUS, NOW, false, true, 1000));
+            h.drain();
+            h.ticks(14);
+            assertEquals(2, h.overviewCalls().size());
+            h.ticks(1);
+            assertEquals(3, h.overviewCalls().size());
+            assertNull(h.overviewCalls().get(2).request.url().queryParameter("focus_item_id"));
+            h.ticks(75);
+            assertEquals("Repeated due ticks share the current full request", 3, h.overviewCalls().size());
+            assertFalse((boolean) get(h.plugin, "overviewRefreshPending"));
+        }
+    }
+
+    @Test
+    public void failedManualFreshIntentSurvivesRetryButDoesNotForceFutureAutomaticRequests() throws Exception
+    {
+        for (String failure : new String[]{"transport", "http", "json"})
+        {
+            try (Harness h = harness())
+            {
+                h.attachPanel();
+                h.requestFull(true).respond(pricedPayload(60, NOW - 60, NOW - 120, false, 101, 249));
+                h.drain();
+                TestCall manual = h.requestFreshMarket();
+                assertEquals("1", manual.request.url().queryParameter("fresh_market"));
+                if ("transport".equals(failure)) manual.fail();
+                else if ("http".equals(failure)) manual.respond(503, "{\"error\":\"temporary failure\"}");
+                else manual.respond("{\"success\":true}");
+                h.drain();
+                assertTrue((boolean) get(h.plugin, "overviewFreshMarketPending"));
+                assertTrue(h.renderedPanelText().contains("tijdelijk niet beschikbaar"));
+                h.enableGameTicks();
+                h.ticks(30);
+                assertEquals("An explicit refresh still respects the failure backoff", 2, h.overviewCalls().size());
+                h.expireOverviewBackoff();
+                h.ticks(1);
+                assertEquals(3, h.overviewCalls().size());
+                TestCall retry = h.overviewCalls().get(2);
+                assertEquals("The manual intent survives " + failure, "1", retry.request.url().queryParameter("fresh_market"));
+                retry.respond(pricedPayload(15, NOW, NOW - 10, false, 23456, 24999));
+                h.drain();
+                assertTrue(h.renderedPanelText().contains("23 456 gp"));
+                assertFalse(h.view().marketStale);
+                assertFalse((boolean) get(h.plugin, "overviewFreshMarketPending"));
+                h.ticks(24);
+                assertEquals(3, h.overviewCalls().size());
+                h.ticks(1);
+                assertEquals(4, h.overviewCalls().size());
+                assertNull("Success consumes the force intent", h.overviewCalls().get(3).request.url().queryParameter("fresh_market"));
+            }
+        }
+    }
+
+    @Test
+    public void fastServerAdviceDoesNotBypassBackoffOrForceAutomaticRecovery() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.requestFull(true).respond(pricedPayload(15, NOW, NOW - 60, false, 101, 249));
+            h.drain();
+            h.enableGameTicks();
+            h.ticks(25);
+            assertEquals(2, h.overviewCalls().size());
+            h.overviewCalls().get(1).fail();
+            h.drain();
+            h.ticks(100);
+            assertEquals(2, h.overviewCalls().size());
+            h.expireOverviewBackoff();
+            h.ticks(1);
+            assertEquals(3, h.overviewCalls().size());
+            assertNull(h.overviewCalls().get(2).request.url().queryParameter("fresh_market"));
+        }
+    }
+
+    @Test
+    public void accountSwitchResetsFastCadenceAndDiscardsLateOldAdvice() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.requestFull(true).respond(pricedPayload(15, NOW, NOW - 60, false, 101, 249));
+            h.drain();
+            assertEquals(25, get(h.plugin, "overviewRefreshGameTicks"));
+            TestCall old = h.requestFreshMarket();
+            old.respond(pricedPayload(15, NOW, NOW, false, 999, 1999));
+            h.accountHash = 84;
+            invoke(h.plugin, "switchToCurrentAccount");
+            h.disableUnrelatedScheduling();
+            h.drain();
+            assertEquals(100, get(h.plugin, "overviewRefreshGameTicks"));
+            assertFalse((boolean) get(h.plugin, "overviewFreshMarketPending"));
+            assertTrue(h.view().hourly.isEmpty());
+        }
+    }
+
+    private static String pricedPayload(int refreshSeconds, long snapshotAt, long transactionAt,
+        boolean stale, int buyPrice, int sellPrice)
+    {
+        JsonObject response = GSON.fromJson(payload(TOP_IDS, 0, snapshotAt, stale, true, 1_000_000), JsonObject.class);
+        response.addProperty("refresh_after_seconds", refreshSeconds);
+        response.getAsJsonObject("market_refresh").addProperty("upstream_cache_hit", true);
+        for (com.google.gson.JsonElement entry : response.getAsJsonObject("opportunities").getAsJsonArray("hourly"))
+        {
+            JsonObject row = entry.getAsJsonObject();
+            row.addProperty("buy_price", buyPrice);
+            row.addProperty("sell_price", sellPrice);
+            row.addProperty("instant_sell", buyPrice - 1);
+            row.addProperty("instant_buy", sellPrice + 1);
+            row.addProperty("price_updated_at", transactionAt);
+        }
+        return GSON.toJson(response);
+    }
+
     private Harness harness() throws Exception
     {
         return new Harness(temporary.newFolder().toPath());
@@ -849,6 +1015,14 @@ public class OverviewListContinuityTest
             return calls.get(before);
         }
 
+        TestCall requestFreshMarket() throws Exception
+        {
+            int before = calls.size();
+            invoke(plugin, "requestFreshMarketOverview");
+            assertEquals(before + 1, calls.size());
+            return calls.get(before);
+        }
+
         List<TestCall> overviewCalls()
         {
             return calls.stream().filter(call -> call.request.url().encodedPath().endsWith("/overview"))
@@ -885,9 +1059,13 @@ public class OverviewListContinuityTest
         void fail() { callback.onFailure(this, new IOException("Fixture connection timeout")); }
         void respond(String body) throws IOException
         {
+            respond(200, body);
+        }
+        void respond(int status, String body) throws IOException
+        {
             assertNotNull(callback);
             callback.onResponse(this, new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
-                .code(200).message("Fixture").body(ResponseBody.create(MediaType.parse("application/json"), body)).build());
+                .code(status).message("Fixture").body(ResponseBody.create(MediaType.parse("application/json"), body)).build());
         }
         @Override public Request request() { return request; }
         @Override public Response execute() { throw new AssertionError("Real network forbidden"); }
