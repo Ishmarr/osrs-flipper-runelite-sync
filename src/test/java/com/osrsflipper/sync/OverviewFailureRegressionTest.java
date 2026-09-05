@@ -63,17 +63,48 @@ public class OverviewFailureRegressionTest
     {
         String[] payloads = {"<html>Worker exceeded resource limits</html>", "{\"success\":true}",
             completePayload().replace("\"cash\":{\"available\":1000", "\"cash\":{\"available\":null"),
-            completePayload().replace("\"realized_profit\":0", "\"realized_profit\":null")};
+            completePayload().replace("\"realized_profit\":0", "\"realized_profit\":null"),
+            completePayload().replace("\"hourly\":[]", "\"hourly\":[null]"),
+            completePayload().replace("\"hourly\":[]", "\"hourly\":[{}]"),
+            completePayload().replace("\"hourly\":[]", "\"hourly\":[],\"focus\":{\"item_id\":-1}")};
         for (String payload : payloads)
         {
             OsrsFlipperSyncPlugin plugin = plugin();
-            RuneliteOverviewView previous = RuneliteOverviewView.empty();
+            RuneliteOverviewView previous = lastGoodOverview();
             set(plugin, "overview", previous);
             handle(plugin, payload.startsWith("<") ? 503 : 200, payload);
-            assertSame(previous, get(plugin, "overview"));
+            RuneliteOverviewView current = (RuneliteOverviewView) get(plugin, "overview");
+            assertPreservedOverviewData(previous, current);
+            assertFalse(current.marketAvailable);
+            assertTrue(current.marketStale);
+            assertTrue(previous.marketAvailable);
+            assertFalse(previous.marketStale);
             assertTrue(health(plugin).failed(SyncHealthTracker.Channel.OVERVIEW));
             assertFalse((Boolean) get(plugin, "overviewInFlight"));
         }
+    }
+
+    @Test
+    public void focusedResponseForAnotherItemCannotReplaceValidGlobalOrSelectedData() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = plugin();
+        RuneliteOverviewView previous = lastGoodOverview();
+        set(plugin, "overview", previous);
+        set(plugin, "focusedGeItemId", 385);
+        Method method = OsrsFlipperSyncPlugin.class.getDeclaredMethod("handleOverviewResponse",
+            int.class, String.class, long.class, long.class, long.class, long.class, int.class);
+        method.setAccessible(true);
+        method.invoke(plugin, 200,
+            completePayload().replace("\"hourly\":[]", "\"hourly\":[],\"focus\":{\"item_id\":386}"),
+            get(plugin, "activeAccountHash"), 0L, 0L, 0L, 385);
+
+        RuneliteOverviewView current = (RuneliteOverviewView) get(plugin, "overview");
+        assertPreservedOverviewData(previous, current);
+        assertTrue(current.marketAvailable);
+        assertFalse(current.marketStale);
+        assertTrue(health(plugin).failed(SyncHealthTracker.Channel.FOCUS));
+        assertFalse(health(plugin).failed(SyncHealthTracker.Channel.OVERVIEW));
+        assertFalse((Boolean) get(plugin, "overviewInFlight"));
     }
 
     @Test
@@ -350,6 +381,34 @@ public class OverviewFailureRegressionTest
             "\"stats\":{\"today\":" + period + ",\"month\":" + period + ",\"total\":" + period + "}," +
             "\"cash\":{\"available\":1000,\"reserved\":0,\"available_plus_reserved\":1000,\"updated_at\":1}," +
             "\"price_tests\":[]}";
+    }
+
+    private static RuneliteOverviewView lastGoodOverview()
+    {
+        RuneliteOverviewView.Opportunity first = new RuneliteOverviewView.Opportunity(
+            385, "Anglerfish", "cycle_profit", 1811, 1877, 1878, 1810,
+            100, 2900, 100, 2900, 2900, 100);
+        RuneliteOverviewView.Opportunity second = new RuneliteOverviewView.Opportunity(
+            4151, "Abyssal whip", "cycle_profit", 1000, 1100, 1101, 999,
+            100, 7000, 100, 7000, 7000, 100);
+        return new RuneliteOverviewView(java.util.Collections.emptyList(),
+            java.util.Arrays.asList(first, second), first,
+            new RuneliteOverviewView.PeriodStats(123, 1, 2, 3, 4, 5),
+            RuneliteOverviewView.PeriodStats.empty(), RuneliteOverviewView.PeriodStats.empty(),
+            java.util.Collections.emptyList(), new RuneliteOverviewView.CashBalance(777, 0, 777, 1), 100);
+    }
+
+    private static void assertPreservedOverviewData(RuneliteOverviewView previous, RuneliteOverviewView current)
+    {
+        assertEquals(previous.hourly, current.hourly);
+        assertEquals(2, current.hourly.size());
+        assertSame(previous.hourly.get(0), current.hourly.get(0));
+        assertSame(previous.hourly.get(1), current.hourly.get(1));
+        assertSame(previous.focus, current.focus);
+        assertEquals(previous.generatedAt, current.generatedAt);
+        assertTrue(current.topOpportunitiesLoaded);
+        assertSame(previous.cash, current.cash);
+        assertSame(previous.today, current.today);
     }
 
     private static OsrsFlipperSyncPlugin plugin() throws Exception

@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.31";
+    private static final String PLUGIN_VERSION = "5.2.32";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -230,6 +230,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private volatile Call marketPriceCall;
     private long marketPriceGeneration;
     private boolean overviewInFlight;
+    private int overviewInFlightFocusItemId;
+    private int pendingFocusedOverviewItemId;
     private long overviewRequestGeneration;
     private long overviewContextGeneration;
     private boolean cashInFlight;
@@ -2663,6 +2665,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 break;
             case OVERVIEW:
                 overviewInFlight = false;
+                overviewInFlightFocusItemId = 0;
                 overviewInFlightFreshMarket = false;
                 overviewInFlightFreshBuyLimits = false;
                 break;
@@ -2681,9 +2684,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             return;
         }
-        overviewRefreshPending = true;
-        overviewFreshMarketPending |= overviewInFlightFreshMarket;
-        overviewFreshBuyLimitsPending |= overviewInFlightFreshBuyLimits;
+        rememberOverviewRequest(overviewInFlightFocusItemId,
+            overviewInFlightFreshMarket, overviewInFlightFreshBuyLimits);
         workerRequests.cancelOverview(WorkerRequestCoordinator.Cancellation.OVERVIEW_PREEMPTED);
     }
 
@@ -2702,9 +2704,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerPumpActive = true;
         try
         {
-            boolean overviewDue = overviewRefreshPending ||
-                (syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW) &&
-                    now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW));
+            boolean fullOverviewDue = (overviewRefreshPending ||
+                syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW)) &&
+                now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW);
+            boolean focusOverviewDue = pendingFocusedOverviewItemId > 0 &&
+                pendingFocusedOverviewItemId == focusedGeItemId &&
+                now() >= syncHealth.retryAt(SyncHealthTracker.Channel.FOCUS);
             WorkerRequestCoordinator.Kind next = nextWorkerRequestKind(
                 pendingSnapshot != null,
                 hasQueuedEvents(),
@@ -2712,7 +2717,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN,
                 pendingCashUpdate != null,
                 statusCheckPending,
-                overviewDue,
+                fullOverviewDue || focusOverviewDue,
                 heartbeatNextAttemptAt > 0);
             if (next == null)
             {
@@ -2734,7 +2739,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     checkDeviceStatus();
                     break;
                 case OVERVIEW:
-                    requestOverview(false);
+                    if (fullOverviewDue) requestOverview(false);
+                    else requestFocusedOverview(pendingFocusedOverviewItemId);
                     break;
                 case HEARTBEAT:
                     sendHeartbeat();
@@ -3432,6 +3438,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewContextGeneration++;
         overviewRequestGeneration++;
         overviewInFlight = false;
+        overviewInFlightFocusItemId = 0;
+        pendingFocusedOverviewItemId = 0;
         overviewRefreshPending = false;
         overviewFreshMarketPending = false;
         overviewFreshBuyLimitsPending = false;
@@ -3454,6 +3462,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void healthFailure(SyncHealthTracker.Channel channel, String safeReason)
     {
         syncHealth.fail(channel, safeReason, now());
+        if (channel == SyncHealthTracker.Channel.OVERVIEW)
+        {
+            overview = overview.withMarketUnavailable();
+            refreshSidePanel();
+        }
         LOG.warn("{}: {}; automatische herstelcontrole blijft actief", channel.label, safeReason);
         updateHealthPanel();
     }
@@ -3613,32 +3626,60 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void requestOverview(boolean force, boolean freshMarket, boolean freshBuyLimits)
     {
+        requestOverviewForScope(force, freshMarket, freshBuyLimits, 0);
+    }
+
+    private void requestFocusedOverview(int itemId)
+    {
+        if (itemId <= 0 || itemId != focusedGeItemId) return;
+        // A targeted result supplies advice for one item, never the top list.
+        if (!overview.topOpportunitiesLoaded) overviewRefreshPending = true;
+        requestOverviewForScope(true, false, false, itemId);
+    }
+
+    private void rememberOverviewRequest(int focusItemId, boolean freshMarket, boolean freshBuyLimits)
+    {
+        if (focusItemId > 0)
+        {
+            if (focusItemId == focusedGeItemId) pendingFocusedOverviewItemId = focusItemId;
+        }
+        else
+        {
+            overviewRefreshPending = true;
+            overviewFreshMarketPending |= freshMarket;
+            overviewFreshBuyLimitsPending |= freshBuyLimits;
+        }
+    }
+
+    private void requestOverviewForScope(boolean force, boolean freshMarket, boolean freshBuyLimits, int focusItemId)
+    {
         if (!started || pairingInFlight || !hasDeviceToken())
         {
             return;
         }
         if (overviewInFlight)
         {
-            if (force)
+            // Repeated ticks while a full retry is already running are served
+            // by that retry. Only a different scope or an explicit refresh
+            // needs to remain queued after it finishes.
+            if (focusItemId > 0 || overviewInFlightFocusItemId > 0 || force || freshMarket || freshBuyLimits)
             {
-                overviewRefreshPending = true;
+                rememberOverviewRequest(focusItemId, freshMarket, freshBuyLimits);
             }
-            overviewFreshMarketPending |= freshMarket;
-            overviewFreshBuyLimitsPending |= freshBuyLimits;
             return;
         }
         // Handmatige/focusrefresh omzeilt de foutbackoff niet. Eerst GE-delta's
         // afleveren; de onafhankelijke Wiki-prijsaanvragen blijven beschikbaar.
-        if (now() < syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW) ||
+        SyncHealthTracker.Channel channel = focusItemId > 0
+            ? SyncHealthTracker.Channel.FOCUS : SyncHealthTracker.Channel.OVERVIEW;
+        if (now() < syncHealth.retryAt(channel) ||
             now() < workerBackoffUntil || workerRequests.isActive() ||
             requestInFlight || snapshotInFlight || slotStateInFlight || statusInFlight ||
             heartbeatInFlight || cashInFlight ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
             hasQueuedEvents() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))
         {
-            overviewRefreshPending = true;
-            overviewFreshMarketPending |= freshMarket;
-            overviewFreshBuyLimitsPending |= freshBuyLimits;
+            rememberOverviewRequest(focusItemId, freshMarket, freshBuyLimits);
             return;
         }
         HttpUrl base = endpoint(OVERVIEW_PATH);
@@ -3647,11 +3688,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        freshMarket |= overviewFreshMarketPending;
-        freshBuyLimits |= overviewFreshBuyLimitsPending;
-        overviewRefreshPending = false;
-        overviewFreshMarketPending = false;
-        overviewFreshBuyLimitsPending = false;
+        if (focusItemId == 0)
+        {
+            freshMarket |= overviewFreshMarketPending;
+            freshBuyLimits |= overviewFreshBuyLimitsPending;
+            overviewRefreshPending = false;
+            overviewFreshMarketPending = false;
+            overviewFreshBuyLimitsPending = false;
+        }
 
         ZoneId zone = ZoneId.systemDefault();
         LocalDate today = LocalDate.now(zone);
@@ -3661,7 +3705,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             base,
             dayStart,
             monthStart,
-            focusedGeItemId,
+            focusItemId,
             freshMarket,
             freshBuyLimits,
             trackedGuidanceItemIds());
@@ -3673,15 +3717,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         Call workerCall = beginWorkerRequest(WorkerRequestCoordinator.Kind.OVERVIEW, request);
         if (workerCall == null)
         {
-            overviewRefreshPending = true;
-            overviewFreshMarketPending |= freshMarket;
-            overviewFreshBuyLimitsPending |= freshBuyLimits;
+            rememberOverviewRequest(focusItemId, freshMarket, freshBuyLimits);
             return;
         }
         overviewInFlight = true;
+        overviewInFlightFocusItemId = focusItemId;
+        if (focusItemId > 0 && pendingFocusedOverviewItemId == focusItemId) pendingFocusedOverviewItemId = 0;
         overviewInFlightFreshMarket = freshMarket;
         overviewInFlightFreshBuyLimits = freshBuyLimits;
-        overviewTicks = 0;
+        if (focusItemId == 0) overviewTicks = 0;
         workerCall.enqueue(new Callback()
         {
             @Override
@@ -3697,7 +3741,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     {
                         return;
                     }
-                    healthFailure(SyncHealthTracker.Channel.OVERVIEW, "netwerkfout/time-out");
+                    if (focusItemId == 0 || focusItemId == focusedGeItemId)
+                    {
+                        healthFailure(channel, "netwerkfout/time-out");
+                        rememberOverviewRequest(focusItemId, false, false);
+                    }
                     debug("RuneLite-kansen konden niet worden opgehaald: {}", exception.getMessage());
                     finishOverviewRequest(
                         requestAccountHash,
@@ -3721,7 +3769,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                         requestAccountHash,
                         requestGeneration,
                         requestContextGeneration,
-                        requestPriceRevision)));
+                        requestPriceRevision,
+                        focusItemId)));
             }
         });
     }
@@ -3733,6 +3782,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
         long requestGeneration,
         long requestContextGeneration,
         long requestPriceRevision)
+    {
+        handleOverviewResponse(statusCode, body, requestAccountHash, requestGeneration,
+            requestContextGeneration, requestPriceRevision, 0);
+    }
+
+    private void handleOverviewResponse(
+        int statusCode, String body, long requestAccountHash, long requestGeneration,
+        long requestContextGeneration, long requestPriceRevision, int requestFocusItemId)
     {
         if (!isCurrentOverviewRequest(
             requestAccountHash,
@@ -3746,6 +3803,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             debug("Verouderde overviewrespons voor account {} genegeerd", requestAccountHash);
             return;
         }
+        SyncHealthTracker.Channel channel = requestFocusItemId > 0
+            ? SyncHealthTracker.Channel.FOCUS : SyncHealthTracker.Channel.OVERVIEW;
         if (statusCode == 401 || statusCode == 403)
         {
             overviewInFlight = false;
@@ -3755,9 +3814,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
             clearStoredPairing("Koppeling ongeldig of ingetrokken; maak een nieuwe code");
             return;
         }
+        if (requestFocusItemId > 0 && requestFocusItemId != focusedGeItemId)
+        {
+            finishOverviewRequest(requestAccountHash, requestGeneration, requestContextGeneration);
+            return;
+        }
         if (statusCode < 200 || statusCode >= 300)
         {
-            healthFailure(SyncHealthTracker.Channel.OVERVIEW, "HTTP " + statusCode);
+            healthFailure(channel, "HTTP " + statusCode);
+            rememberOverviewRequest(requestFocusItemId, false, false);
             finishOverviewRequest(
                 requestAccountHash,
                 requestGeneration,
@@ -3772,7 +3837,25 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 throw new IllegalArgumentException("onvolledig overviewantwoord");
             }
-            overview = response.toView(overview);
+            if (requestFocusItemId > 0 && response.opportunities.focus != null &&
+                response.opportunities.focus.item_id != requestFocusItemId)
+                throw new IllegalArgumentException("focusantwoord hoort bij een ander item");
+            overview = response.toView(overview, requestFocusItemId);
+            if (requestFocusItemId == 0 && response.topOpportunitiesAvailable() && focusedGeItemId > 0)
+            {
+                // A full scan may omit the selected item. Refresh its small,
+                // focused view once after this scan, through the same request
+                // coordinator, so old cash/buy-limit advice cannot linger.
+                if (overview.opportunityForItem(focusedGeItemId) == null)
+                {
+                    pendingFocusedOverviewItemId = focusedGeItemId;
+                }
+                else
+                {
+                    pendingFocusedOverviewItemId = 0;
+                    healthSuccess(SyncHealthTracker.Channel.FOCUS);
+                }
+            }
             Map<Integer, Long> advancedPriceTombstones =
                 lastTradePrices.mergeAuthoritative(overview.priceTests, requestPriceRevision);
             for (Map.Entry<Integer, Long> cleared : advancedPriceTombstones.entrySet())
@@ -3788,9 +3871,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             refreshOpenFlipSellGuidance();
             persistCurrentAccount();
             markWorkerSuccess();
-            if (response.opportunitiesAvailable())
+            if (requestFocusItemId > 0 ? response.opportunitiesAvailable() : response.topOpportunitiesAvailable())
             {
-                healthSuccess(SyncHealthTracker.Channel.OVERVIEW);
+                healthSuccess(channel);
             }
             else
             {
@@ -3798,8 +3881,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 // geleverd. Houd de laatst geldige marktkansen zichtbaar en meld
                 // transparant dat alleen de publieke marktlaag tijdelijk ontbreekt.
                 healthFailure(
-                    SyncHealthTracker.Channel.OVERVIEW,
+                    channel,
                     "marktdata tijdelijk niet beschikbaar; vorige kansen behouden");
+                rememberOverviewRequest(requestFocusItemId, false, false);
             }
             if (panel != null)
             {
@@ -3810,7 +3894,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         catch (RuntimeException exception)
         {
-            healthFailure(SyncHealthTracker.Channel.OVERVIEW, "ongeldig/onvolledig serverantwoord");
+            healthFailure(channel, "ongeldig/onvolledig serverantwoord");
+            rememberOverviewRequest(requestFocusItemId, false, false);
             debug("RuneLite-kansen konden niet worden gelezen: {}", exception.getMessage());
         }
         finally
@@ -3839,15 +3924,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
         overviewInFlight = false;
-        if (overviewRefreshPending && now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW))
-        {
-            boolean freshMarket = overviewFreshMarketPending;
-            boolean freshBuyLimits = overviewFreshBuyLimitsPending;
-            overviewRefreshPending = false;
-            overviewFreshMarketPending = false;
-            overviewFreshBuyLimitsPending = false;
-            requestOverview(true, freshMarket, freshBuyLimits);
-        }
+        overviewInFlightFocusItemId = 0;
+        // finishWorkerRequest pumps the next request after this callback. Keep
+        // cash and GE delivery ahead of any queued full or focused refresh.
     }
 
     static boolean isCurrentOverviewRequest(
@@ -4138,10 +4217,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         focusedGeSide = nextSide;
         focusedGeContext = nextContext;
         focusedExistingSlot = nextExistingSlot;
+        if (itemChanged) overview = overview.withFocus(null);
         refreshSidePanel();
-        if (itemChanged && focusedGeItemId > 0)
+        if (itemChanged)
         {
-            requestOverview(true);
+            pendingFocusedOverviewItemId = 0;
+            if (focusedGeItemId > 0) requestFocusedOverview(focusedGeItemId);
+            else if (!overview.topOpportunitiesLoaded) requestOverview(true);
         }
         if (focusedGeItemId > 0 && (itemChanged || sideChanged || contextChanged))
         {
@@ -5698,14 +5780,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
         List<PriceTestData> price_tests;
         CashData cash;
         OverviewAvailability availability;
+        MarketRefresh market_refresh;
 
         boolean isComplete()
         {
             return success && generated_at > 0 && opportunities != null &&
-                opportunities.hourly != null && stats != null && stats.today != null &&
+                opportunities.hourly != null && validOpportunityRows(opportunities.hourly) &&
+                validOpportunityRows(opportunities.expected) &&
+                (opportunities.focus == null || opportunities.focus.item_id > 0) &&
+                stats != null && stats.today != null &&
                 stats.month != null && stats.total != null && stats.today.isComplete() &&
                 stats.month.isComplete() && stats.total.isComplete() && cash != null &&
                 cash.isComplete() && price_tests != null;
+        }
+
+        private static boolean validOpportunityRows(List<OpportunityData> rows)
+        {
+            if (rows == null) return true;
+            for (OpportunityData row : rows)
+            {
+                if (row == null || row.item_id <= 0) return false;
+            }
+            return true;
         }
 
         boolean opportunitiesAvailable()
@@ -5715,6 +5811,21 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return availability == null || availability.opportunities;
         }
 
+        boolean marketStale()
+        {
+            return (availability != null && availability.degraded) ||
+                (market_refresh != null && (market_refresh.stale || market_refresh.degraded)) ||
+                (market_generated_at > 0 && generated_at - market_generated_at > 15 * 60);
+        }
+
+        boolean topOpportunitiesAvailable()
+        {
+            // A degraded scanner can successfully return [] after discarding all
+            // expired prices. That is not evidence that no profitable flips exist.
+            return opportunitiesAvailable() && !(marketStale() &&
+                opportunityViews(opportunities == null ? null : opportunities.hourly).isEmpty());
+        }
+
         RuneliteOverviewView toView()
         {
             return toView(null);
@@ -5722,18 +5833,30 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         RuneliteOverviewView toView(RuneliteOverviewView previous)
         {
-            boolean retainPreviousOpportunities = !opportunitiesAvailable() && previous != null;
-            List<RuneliteOverviewView.Opportunity> expected = retainPreviousOpportunities
-                ? previous.expected
-                : opportunityViews(opportunities == null ? null : opportunities.expected);
-            List<RuneliteOverviewView.Opportunity> hourly = retainPreviousOpportunities
-                ? previous.hourly
-                : opportunityViews(opportunities == null ? null : opportunities.hourly);
-            RuneliteOverviewView.Opportunity focus = retainPreviousOpportunities
-                ? previous.focus
-                : (opportunities == null || opportunities.focus == null
-                    ? null
-                    : opportunities.focus.toView());
+            return toView(previous, 0);
+        }
+
+        RuneliteOverviewView toView(RuneliteOverviewView previous, int requestFocusItemId)
+        {
+            RuneliteOverviewView prior = previous == null ? RuneliteOverviewView.empty() : previous;
+            boolean focused = requestFocusItemId > 0;
+            boolean available = topOpportunitiesAvailable();
+            boolean replaceTop = !focused && available;
+            // The request scope is captured before HTTP starts. A focused scan is
+            // only advice for that item, even when its hourly list happens to be empty.
+            List<RuneliteOverviewView.Opportunity> expected = replaceTop
+                ? opportunityViews(opportunities == null ? null : opportunities.expected) : prior.expected;
+            List<RuneliteOverviewView.Opportunity> hourly = replaceTop
+                ? opportunityViews(opportunities == null ? null : opportunities.hourly) : prior.hourly;
+            RuneliteOverviewView.Opportunity focus = replaceTop ? null : prior.focus;
+            if (opportunitiesAvailable() && opportunities != null && opportunities.focus != null)
+            {
+                focus = opportunities.focus.toView();
+            }
+            else if (focused && opportunitiesAvailable())
+            {
+                focus = null;
+            }
             return new RuneliteOverviewView(
                 expected,
                 hourly,
@@ -5745,7 +5868,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 cash == null
                     ? RuneliteOverviewView.CashBalance.empty()
                     : cash.toView(),
-                market_generated_at > 0 ? market_generated_at : generated_at);
+                replaceTop ? (market_generated_at > 0 ? market_generated_at : generated_at) : prior.generatedAt,
+                replaceTop || prior.topOpportunitiesLoaded,
+                focused ? prior.marketAvailable : available,
+                focused ? prior.marketStale : !available || marketStale());
         }
 
         private static List<LastTradePriceView> priceTestViews(List<PriceTestData> rows)
@@ -5908,6 +6034,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         boolean opportunities;
         boolean degraded;
         String error_code;
+    }
+
+    private static final class MarketRefresh
+    {
+        boolean stale;
+        boolean degraded;
     }
 
     private static final class PeriodItemData

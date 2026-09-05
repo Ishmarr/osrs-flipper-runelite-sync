@@ -28,7 +28,7 @@ dependencyLocking {
 }
 
 group = 'com.osrsflipper'
-version = '5.2.31'
+version = '5.2.32'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -39,10 +39,25 @@ tasks.withType(JavaCompile).configureEach {
 // failure enabled so broken test discovery cannot silently pass the build.
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
     exclude 'com/osrsflipper/sync/OsrsFlipperSyncPluginTest.class'
+    doFirst {
+        // RuneLite and its default logger resolve files from user.home during
+        // static initialization. Set the forked JVM properties before any test
+        // classes load, using a fresh directory for each actual test execution.
+        def testRoot = layout.buildDirectory.dir('test-runtime').get().asFile.toPath()
+        java.nio.file.Files.createDirectories(testRoot)
+        def executionRoot = java.nio.file.Files.createTempDirectory(testRoot, "${name}-")
+        def testHome = java.nio.file.Files.createDirectory(executionRoot.resolve('home')).toString()
+        def testTemporary = java.nio.file.Files.createDirectory(executionRoot.resolve('tmp')).toString()
+        systemProperty 'user.home', testHome
+        systemProperty 'java.io.tmpdir', testTemporary
+        systemProperty 'osrsflipper.test.home', testHome
+    }
 }
 
 tasks.register('run', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath
+    // The development entry point lives in test classes; test-only logging and
+    // fixtures must not configure the real RuneLite client.
+    classpath = sourceSets.test.runtimeClasspath - files(sourceSets.test.output.resourcesDir)
     mainClass = pluginMainClass
     jvmArgs '-ea'
     args '--developer-mode'
@@ -66,6 +81,7 @@ tasks.register('shadowJar', Jar) {
     exclude 'META-INF/*.DSA'
     exclude 'META-INF/*.RSA'
     exclude '**/module-info.class'
+    exclude 'logback-test.xml'
     archiveClassifier.set('shadow')
     archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
 }

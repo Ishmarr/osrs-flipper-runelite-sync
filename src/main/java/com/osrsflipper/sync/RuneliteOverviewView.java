@@ -15,6 +15,9 @@ final class RuneliteOverviewView
     final List<LastTradePriceView> priceTests;
     final CashBalance cash;
     final long generatedAt;
+    final boolean topOpportunitiesLoaded;
+    final boolean marketAvailable;
+    final boolean marketStale;
 
     RuneliteOverviewView(
         List<Opportunity> expected,
@@ -51,6 +54,24 @@ final class RuneliteOverviewView
         CashBalance cash,
         long generatedAt)
     {
+        this(expected, hourly, focus, today, month, total, priceTests, cash, generatedAt,
+            generatedAt > 0, true, false);
+    }
+
+    RuneliteOverviewView(
+        List<Opportunity> expected,
+        List<Opportunity> hourly,
+        Opportunity focus,
+        PeriodStats today,
+        PeriodStats month,
+        PeriodStats total,
+        List<LastTradePriceView> priceTests,
+        CashBalance cash,
+        long generatedAt,
+        boolean topOpportunitiesLoaded,
+        boolean marketAvailable,
+        boolean marketStale)
+    {
         this.expected = immutable(expected);
         this.hourly = immutable(hourly);
         this.focus = focus;
@@ -62,6 +83,9 @@ final class RuneliteOverviewView
             : priceTests));
         this.cash = cash == null ? CashBalance.empty() : cash;
         this.generatedAt = Math.max(0, generatedAt);
+        this.topOpportunitiesLoaded = topOpportunitiesLoaded;
+        this.marketAvailable = marketAvailable;
+        this.marketStale = marketStale;
     }
 
     static RuneliteOverviewView empty()
@@ -69,6 +93,18 @@ final class RuneliteOverviewView
         PeriodStats empty = PeriodStats.empty();
         return new RuneliteOverviewView(
             Collections.emptyList(), Collections.emptyList(), null, empty, empty, empty, 0);
+    }
+
+    RuneliteOverviewView withFocus(Opportunity nextFocus)
+    {
+        return new RuneliteOverviewView(expected, hourly, nextFocus, today, month, total,
+            priceTests, cash, generatedAt, topOpportunitiesLoaded, marketAvailable, marketStale);
+    }
+
+    RuneliteOverviewView withMarketUnavailable()
+    {
+        return new RuneliteOverviewView(expected, hourly, focus, today, month, total,
+            priceTests, cash, generatedAt, topOpportunitiesLoaded, false, true);
     }
 
     Opportunity opportunityForItem(int itemId)

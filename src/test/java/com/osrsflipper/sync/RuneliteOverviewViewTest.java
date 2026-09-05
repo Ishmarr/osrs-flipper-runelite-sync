@@ -8,9 +8,11 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class RuneliteOverviewViewTest
 {
@@ -164,6 +166,77 @@ public class RuneliteOverviewViewTest
 
         assertEquals(123, view.priceTests.get(0).clearedAt);
         assertEquals(0, view.priceTests.get(0).lastBuyPrice);
+    }
+
+    @Test
+    public void focusChangesPreserveGlobalMarketStateAndPersonalData()
+    {
+        RuneliteOverviewView original = completeView().withMarketUnavailable();
+        RuneliteOverviewView.Opportunity selected = opportunity(303, 300, 400);
+        RuneliteOverviewView focused = original.withFocus(selected);
+
+        assertNotSame(original, focused);
+        assertSame(selected, focused.focus);
+        assertEquals(202, original.focus.itemId);
+        assertGlobalAndPersonalDataPreserved(original, focused);
+        assertFalse(focused.marketAvailable);
+        assertTrue(focused.marketStale);
+        assertThrows(UnsupportedOperationException.class, () -> focused.hourly.clear());
+        assertThrows(UnsupportedOperationException.class, () -> focused.priceTests.clear());
+
+        RuneliteOverviewView cleared = focused.withFocus(null);
+        assertNull(cleared.focus);
+        assertSame(selected, focused.focus);
+        assertGlobalAndPersonalDataPreserved(original, cleared);
+        assertFalse(cleared.marketAvailable);
+        assertTrue(cleared.marketStale);
+    }
+
+    @Test
+    public void marketFailureKeepsLastGoodValuesAndDoesNotInventACompletedColdLoad()
+    {
+        RuneliteOverviewView original = completeView();
+        RuneliteOverviewView unavailable = original.withMarketUnavailable();
+
+        assertNotSame(original, unavailable);
+        assertFalse(unavailable.marketAvailable);
+        assertTrue(unavailable.marketStale);
+        assertTrue(original.marketAvailable);
+        assertFalse(original.marketStale);
+        assertSame(original.focus, unavailable.focus);
+        assertGlobalAndPersonalDataPreserved(original, unavailable);
+
+        RuneliteOverviewView cold = RuneliteOverviewView.empty().withMarketUnavailable();
+        assertFalse(cold.topOpportunitiesLoaded);
+        assertEquals(0, cold.generatedAt);
+        assertTrue(cold.hourly.isEmpty());
+        assertFalse(cold.marketAvailable);
+        assertTrue(cold.marketStale);
+    }
+
+    private static RuneliteOverviewView completeView()
+    {
+        RuneliteOverviewView.Opportunity row = opportunity(202, 200, 300);
+        return new RuneliteOverviewView(Collections.singletonList(row), Collections.singletonList(row), row,
+            new RuneliteOverviewView.PeriodStats(1, 2, 3, 4, 5, 6),
+            new RuneliteOverviewView.PeriodStats(10, 20, 30, 40, 50, 60),
+            new RuneliteOverviewView.PeriodStats(100, 200, 300, 400, 500, 600),
+            Collections.singletonList(new LastTradePriceView(202, 210, 290, 20, 21)),
+            new RuneliteOverviewView.CashBalance(1_000_000, 250_000, 1_250_000, 20),
+            1234, true, true, false);
+    }
+
+    private static void assertGlobalAndPersonalDataPreserved(RuneliteOverviewView expected, RuneliteOverviewView actual)
+    {
+        assertEquals(expected.expected, actual.expected);
+        assertEquals(expected.hourly, actual.hourly);
+        assertSame(expected.today, actual.today);
+        assertSame(expected.month, actual.month);
+        assertSame(expected.total, actual.total);
+        assertEquals(expected.priceTests, actual.priceTests);
+        assertSame(expected.cash, actual.cash);
+        assertEquals(expected.generatedAt, actual.generatedAt);
+        assertEquals(expected.topOpportunitiesLoaded, actual.topOpportunitiesLoaded);
     }
 
     private static RuneliteOverviewView.Opportunity opportunity(int itemId, int buyPrice, int sellPrice)

@@ -11,7 +11,7 @@ final class SyncHealthTracker
 {
     enum Channel
     {
-        OVERVIEW("Flips/statistieken"), EVENTS("GE-updates"), STATE("GE-controle"),
+        OVERVIEW("Flips/statistieken"), FOCUS("Geselecteerd item"), EVENTS("GE-updates"), STATE("GE-controle"),
         STATUS("Verbindingscontrole"), HEARTBEAT("Heartbeat"), CONNECTION("Koppeling"), STORAGE("Lokale opslag");
 
         final String label;

@@ -1,6 +1,17 @@
-# OSRS Flipper Sync v5.2.31
+# OSRS Flipper Sync v5.2.32
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.32 — Herstel van verdwijnende flips
+
+- Een gerichte aanvraag voor een geselecteerd GE-item kan het volledige flipoverzicht niet meer vervangen. De requestscope wordt vóór verzending vastgelegd; late antwoorden na een item- of accountwissel worden genegeerd.
+- De volledige lijst ververst op de bestaande termijn van 100 game ticks (ongeveer 60 seconden). Itemselecties schuiven die termijn niet op. Als het geselecteerde item buiten de vernieuwde toplijst valt, volgt maximaal één kleine gerichte aanvraag per geslaagde volledige refresh om ook het cash- en buy-limitadvies actueel te houden. Geen extra brede scans of cache-bypasses; alle aanvragen blijven via één coordinator met GE-/cashprioriteit en backoff lopen.
+- Een lege response uit oude of ontbrekende marktdata wist de laatst bruikbare flips niet. Het paneel toont de storing en de oorspronkelijke prijsouderdom, en herstelt automatisch zodra nieuwe data beschikbaar is. Een geldige actuele lege lijst blijft echt leeg; ongeldige items zijn een fout, geen bewijs dat er geen flips zijn.
+- Het paneel onderscheidt laden, marktproblemen, oude prijzen, onvoldoende cash en flips die al in GE-slots staan. De weergegeven prijsouderdom loopt door zonder extra netwerkverkeer.
+- Regressietests volgen echte asynchrone callbacks tot het Swing-paneel, inclusief focuswissels, retries, requestaantallen en accountwissels. Gradle-tests gebruiken een apart RuneLite-profiel en schrijven nooit naar de echte client.log.
+- GitHub voert dezelfde volledige build en tests automatisch uit bij pushes en pull requests naar `main`, met JDK 17 en controle van de Gradle-wrapperchecksum.
+
+Deze fix vereist alleen een herstart van de lokale RuneLite-testclient. De bestaande koppeling blijft bruikbaar. Cloudflare blijft Free voor twee gebruikers; er is geen Workerwijziging of Plugin Hub-publicatie nodig.
 
 ## 5.2.31 — P2-auditfixes
 

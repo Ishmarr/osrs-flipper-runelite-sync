@@ -81,6 +81,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JComboBox<PeriodChoice> statsPeriod = new JComboBox<>(PeriodChoice.values());
     private final JComboBox<StatsSortChoice> statsSort = new JComboBox<>(StatsSortChoice.values());
     private final JLabel cashAvailable = valueLabel("0 GP", GOLD, 20f);
+    private final JLabel opportunityPricesAge = new JLabel();
     private final JTextField cashInput = new JTextField();
     private final LongConsumer saveCashAction;
     private final Timer displayTimer;
@@ -91,6 +92,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private int focusedItemId;
     private String focusedOfferSide = "";
     private RuneliteOverviewView.Opportunity resolvedFocusedOpportunity;
+    private long opportunityPricesUpdatedAt;
+    private String opportunityPricesAgePrefix = "Marktprijzen: ";
 
     OsrsFlipperSyncPanel(
         ItemManager itemManager,
@@ -127,6 +130,11 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         cards.add(scroll(createStatsPage()), STATS);
         cards.add(scroll(createSyncPage(pairAction, syncAction, webappAction)), SYNC);
         add(cards, BorderLayout.CENTER);
+
+        opportunityPricesAge.setForeground(MUTED);
+        opportunityPricesAge.setFont(opportunityPricesAge.getFont().deriveFont(10f));
+        opportunityPricesAge.setAlignmentX(Component.LEFT_ALIGNMENT);
+        opportunityPricesAge.setBorder(new EmptyBorder(6, 1, 2, 1));
 
         displayTimer = new Timer(1000, event -> updateClocks());
         displayTimer.setRepeats(true);
@@ -474,14 +482,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void rebuildOpportunities()
     {
         opportunitiesList.removeAll();
-        if (overview.generatedAt <= 0 && overview.hourly.isEmpty() && overview.focus == null &&
-            resolvedFocusedOpportunity == null)
-        {
-            opportunitiesList.add(emptyMessage("Persoonlijke flips worden opgehaald..."));
-            opportunitiesList.revalidate();
-            opportunitiesList.repaint();
-            return;
-        }
+        opportunityPricesUpdatedAt = 0;
         if (focusedItemId > 0)
         {
             RuneliteOverviewView.Opportunity focused = resolvedFocusedOpportunity;
@@ -489,25 +490,64 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 "Geselecteerde flip",
                 focused == null ? Collections.emptyList() : Collections.singletonList(focused),
                 "Voor dit geopende item zijn nog geen scanner- of slotprijzen beschikbaar.");
+            opportunityPricesUpdatedAt = focused == null ? 0 : focused.priceUpdatedAt;
+            opportunityPricesAgePrefix = "Itemprijzen: ";
+        }
+        else if (!overview.topOpportunitiesLoaded)
+        {
+            opportunitiesList.add(emptyMessage(overview.marketAvailable
+                ? "Persoonlijke flips worden opgehaald..."
+                : "Flips tijdelijk niet beschikbaar. Marktgegevens worden opnieuw opgehaald."));
         }
         else
         {
+            List<RuneliteOverviewView.Opportunity> visible = visibleCycleOpportunities(overview.hourly, offers);
+            if (!overview.marketAvailable || overview.marketStale)
+            {
+                String warningText = overview.marketAvailable
+                    ? "Marktprijzen zijn verouderd. Nieuwe prijzen worden opgehaald."
+                    : visible.isEmpty()
+                        ? "Marktgegevens tijdelijk niet beschikbaar. Nieuwe gegevens worden opgehaald."
+                        : "Marktgegevens tijdelijk niet beschikbaar. Je ziet de laatst opgehaalde flips.";
+                JLabel warning = emptyMessage(warningText);
+                warning.setForeground(GOLD);
+                opportunitiesList.add(warning);
+            }
             addOpportunitySection(
                 "Top flipwaarde",
-                visibleCycleOpportunities(overview.hourly, offers),
-                "Nog geen uitvoerbare flip met minstens 100k GP flipwaarde.");
+                visible,
+                emptyTopOpportunitiesMessage(visible));
+            opportunityPricesUpdatedAt = overview.generatedAt;
+            opportunityPricesAgePrefix = "Marktprijzen: ";
         }
-        if (overview.generatedAt > 0)
+        if (opportunityPricesUpdatedAt > 0)
         {
-            JLabel age = new JLabel("Bijgewerkt " + relativeAge(overview.generatedAt));
-            age.setForeground(MUTED);
-            age.setFont(age.getFont().deriveFont(10f));
-            age.setAlignmentX(Component.LEFT_ALIGNMENT);
-            age.setBorder(new EmptyBorder(6, 1, 2, 1));
-            opportunitiesList.add(age);
+            updateOpportunityPricesAge(Instant.now().getEpochSecond());
+            opportunitiesList.add(opportunityPricesAge);
         }
         opportunitiesList.revalidate();
         opportunitiesList.repaint();
+    }
+
+    private String emptyTopOpportunitiesMessage(List<RuneliteOverviewView.Opportunity> visible)
+    {
+        if (!overview.hourly.isEmpty() && visible.isEmpty())
+        {
+            return "Alle gevonden flips staan al in je GE-slots.";
+        }
+        if (!overview.marketAvailable)
+        {
+            return "Geen bewaarde flips om te tonen. Wacht op nieuwe marktgegevens.";
+        }
+        if (overview.marketStale)
+        {
+            return "Wacht op actuele marktprijzen om uitvoerbare flips te bepalen.";
+        }
+        if (overview.cash.available == 0)
+        {
+            return "Geen vrije GP beschikbaar voor een nieuwe flip. Controleer je cash en GE-offers.";
+        }
+        return "Nog geen uitvoerbare flip met minstens 100k GP flipwaarde.";
     }
 
     private void addOpportunitySection(
@@ -946,10 +986,23 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private void updateClocks()
     {
-        long now = Instant.now().getEpochSecond();
+        updateClocks(Instant.now().getEpochSecond());
+    }
+
+    private void updateClocks(long now)
+    {
         for (OfferCard card : offerCards)
         {
             card.updateTime(now);
+        }
+        updateOpportunityPricesAge(now);
+    }
+
+    private void updateOpportunityPricesAge(long now)
+    {
+        if (opportunityPricesUpdatedAt > 0)
+        {
+            opportunityPricesAge.setText(opportunityPricesAgePrefix + relativeAge(opportunityPricesUpdatedAt, now));
         }
     }
 
@@ -1088,13 +1141,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, remainder);
     }
 
-    private static String relativeAge(long epochSeconds)
+    private static String relativeAge(long epochSeconds, long now)
     {
         if (epochSeconds <= 0)
         {
             return "onbekend";
         }
-        long age = Math.max(0, Instant.now().getEpochSecond() - epochSeconds);
+        long age = Math.max(0, now - epochSeconds);
         if (age < 60)
         {
             return age + " sec geleden";
