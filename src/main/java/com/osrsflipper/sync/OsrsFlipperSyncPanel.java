@@ -160,18 +160,37 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     void updateHealth(String text)
     {
+        SwingUtilities.invokeLater(() -> applyHealth(text));
+    }
+
+    private void applyHealth(String text)
+    {
+        String next = text == null ? "" : text;
+        if (next.equals(healthText))
+        {
+            return;
+        }
+        healthText = next;
+        healthBanner.setText(html(escapeHtml(next).replace("\n", "<br>"), 158));
+        healthBanner.setVisible(!next.isEmpty());
+        revalidate();
+        repaint();
+    }
+
+    void updateView(FlipperPanelView view)
+    {
         SwingUtilities.invokeLater(() ->
         {
-            String next = text == null ? "" : text;
-            if (next.equals(healthText))
-            {
-                return;
-            }
-            healthText = next;
-            healthBanner.setText(html(escapeHtml(next).replace("\n", "<br>"), 158));
-            healthBanner.setVisible(!next.isEmpty());
-            revalidate();
-            repaint();
+            offers = view.offers;
+            lastTradePrices = view.lastTradePrices;
+            focusedItemId = view.focusedItemId;
+            focusedOfferSide = view.focusedSide;
+            resolvedFocusedOpportunity = view.focusedOpportunity;
+            applyOverview(view.overview);
+            applyHealth(view.healthText);
+            rebuildSlots();
+            rebuildOpportunities();
+            rebuildStats();
         });
     }
 
@@ -224,15 +243,20 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     {
         SwingUtilities.invokeLater(() ->
         {
-            overview = nextOverview == null ? RuneliteOverviewView.empty() : nextOverview;
-            if (!cashInput.hasFocus())
-            {
-                cashInput.setText(formatNumber(overview.cash.available));
-            }
-            cashAvailable.setText(formatGp(overview.cash.available));
+            applyOverview(nextOverview);
             rebuildOpportunities();
             rebuildStats();
         });
+    }
+
+    private void applyOverview(RuneliteOverviewView nextOverview)
+    {
+        overview = nextOverview == null ? RuneliteOverviewView.empty() : nextOverview;
+        if (!cashInput.hasFocus())
+        {
+            cashInput.setText(formatNumber(overview.cash.available));
+        }
+        cashAvailable.setText(formatGp(overview.cash.available));
     }
 
     void updateLastTradePrices(Map<Integer, LastTradePriceView> nextPrices)
@@ -634,7 +658,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 SelectedGeOpportunityResolver.isSelectedSetup(opportunity) &&
                 displayedBuyPrice > 0)
             {
-                lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+                lowestPrice = GeTax.calculateLowestBreakEvenSellPrice(
                     displayedBuyPrice,
                     opportunity.itemId);
             }
@@ -642,7 +666,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
         if (displayedBuyPrice > 0 && displayedSellPrice > 0)
         {
-            long profitPerItem = SessionStatsTracker.calculateProfitPerItem(
+            long profitPerItem = GeTax.calculateProfitPerItem(
                 displayedBuyPrice,
                 displayedSellPrice,
                 opportunity.itemId);
@@ -694,7 +718,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             return opportunity == null ? 0L : opportunity.maximumCycleProfit;
         }
-        return SessionStatsTracker.calculateProfitPerItem(
+        return GeTax.calculateProfitPerItem(
             displayedBuyPrice,
             displayedSellPrice,
             opportunity.itemId) * Math.max(0L, opportunity.effectiveMaximumQuantity());
@@ -1132,15 +1156,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         return "<html><div style='width:" + width + "px'>" + (value == null ? "" : value) + "</div></html>";
     }
 
-    static String formatDuration(long seconds)
-    {
-        long safe = Math.max(0, seconds);
-        long hours = safe / 3600;
-        long minutes = (safe % 3600) / 60;
-        long remainder = safe % 60;
-        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, remainder);
-    }
-
     private static String relativeAge(long epochSeconds, long now)
     {
         if (epochSeconds <= 0)
@@ -1269,10 +1284,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
         void updateTime(long now)
         {
-            long stopAt = offer.endedAt > 0
-                ? Math.max(offer.startedAt, offer.endedAt)
-                : now;
-            elapsed.setText(formatDuration(Math.max(0, stopAt - offer.startedAt)));
+            elapsed.setText(offer.timer == null ? "—" : offer.timer.timerText(now));
         }
     }
 

@@ -5,7 +5,11 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import javax.swing.JLabel;
+import javax.swing.SwingUtilities;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
 import org.junit.Test;
@@ -50,6 +54,7 @@ public class GeSlotTimerMatchingTest
 
         assertNotNull(active);
         assertEquals("00:00:30", active.timerText(1_330));
+        assertSidebarTimer(plugin, active, 1_330, "00:00:30");
     }
 
     @Test
@@ -67,6 +72,7 @@ public class GeSlotTimerMatchingTest
             offer(GrandExchangeOfferState.BOUGHT, 4151, 2_000, 100, 100));
         assertNotNull(completed);
         assertEquals("00:05:00", completed.timerText(9_999));
+        assertSidebarTimer(plugin, completed, 9_999, "00:05:00");
     }
 
     @Test
@@ -82,6 +88,48 @@ public class GeSlotTimerMatchingTest
 
         assertNotNull(legacy);
         assertEquals("00:01:00", legacy.timerText(1_060));
+        assertSidebarTimer(plugin, legacy, 1_060, "00:01:00");
+    }
+
+    @Test
+    public void repricePreservesLastFillTimerAndOriginalOfferCreationSeparately() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWithSnapshot(
+            "buy", "active", 4151, 2_000, 100, 1_600, 0, 1_300, 1_300);
+        GeSlotTimerView timer = plugin.geSlotTimerView(0,
+            offer(GrandExchangeOfferState.BUYING, 4151, 2_000, 100, 0));
+        assertSidebarTimer(plugin, timer, 1_700, "00:06:40");
+    }
+
+    @Test
+    public void legacyLastFillFallbackMatchesSidebar() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWithSnapshot(
+            "sell", "partially_filled", 4151, 2_000, 100, 1_000, 0, 0, 1_300);
+        GeSlotTimerView timer = plugin.geSlotTimerView(0,
+            offer(GrandExchangeOfferState.SELLING, 4151, 2_000, 100, 25));
+        assertSidebarTimer(plugin, timer, 1_330, "00:00:30");
+    }
+
+    @Test
+    public void cancellationFreezesTheTotalDurationInBothViews() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWithSnapshot(
+            "sell", "cancelled", 4151, 2_000, 100, 1_000, 1_500, 1_300, 1_300);
+        GeSlotTimerView timer = plugin.geSlotTimerView(0,
+            offer(GrandExchangeOfferState.CANCELLED_SELL, 4151, 2_000, 100, 25));
+        assertSidebarTimer(plugin, timer, 9_999, "00:08:20");
+    }
+
+    @Test
+    public void missingLocalStartIsNotRenderedAsElapsedTimeSinceTheEpoch() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWithSnapshot(
+            "buy", "active", 4151, 2_000, 100, 0, 0, 0, 0);
+        GeSlotTimerView timer = plugin.geSlotTimerView(0,
+            offer(GrandExchangeOfferState.BUYING, 4151, 2_000, 100, 0));
+        assertNull(timer);
+        assertSidebarTimer(plugin, null, 9_999, "—");
     }
 
     @Test
@@ -215,6 +263,59 @@ public class GeSlotTimerMatchingTest
         field.setAccessible(true);
         Object value = field.get(target);
         return ((Number) value).longValue();
+    }
+
+    private static void assertSidebarTimer(
+        OsrsFlipperSyncPlugin plugin, GeSlotTimerView overlay, long now, String expected) throws Exception
+    {
+        Object snapshot = snapshots(plugin).get(1);
+        Method offerView = OsrsFlipperSyncPlugin.class.getDeclaredMethod("offerView", snapshot.getClass());
+        offerView.setAccessible(true);
+        FlipperOfferView sidebar = (FlipperOfferView) offerView.invoke(plugin, snapshot);
+        assertEquals("The original offer creation time must stay intact", field(snapshot, "startedAt"), sidebar.startedAt);
+        if (overlay == null)
+        {
+            assertNull(sidebar.timer);
+        }
+        else
+        {
+            assertNotNull(sidebar.timer);
+            assertEquals(overlay.getStartedAt(), sidebar.timer.getStartedAt());
+            assertEquals(overlay.getEndedAt(), sidebar.timer.getEndedAt());
+            assertEquals(expected, overlay.timerText(now));
+        }
+
+        OsrsFlipperSyncPanel[] panel = new OsrsFlipperSyncPanel[1];
+        SwingUtilities.invokeAndWait(() -> {
+            panel[0] = new OsrsFlipperSyncPanel(null, () -> {}, () -> {}, () -> {}, () -> {}, ignored -> {});
+            panel[0].updateOffers(Collections.singletonList(sidebar));
+        });
+        try
+        {
+            SwingUtilities.invokeAndWait(() -> {
+                try
+                {
+                    Method tick = OsrsFlipperSyncPanel.class.getDeclaredMethod("updateClocks", long.class);
+                    tick.setAccessible(true);
+                    tick.invoke(panel[0], now);
+                    Field cardsField = OsrsFlipperSyncPanel.class.getDeclaredField("offerCards");
+                    cardsField.setAccessible(true);
+                    List<?> cards = (List<?>) cardsField.get(panel[0]);
+                    assertEquals(1, cards.size());
+                    Field labelField = cards.get(0).getClass().getDeclaredField("elapsed");
+                    labelField.setAccessible(true);
+                    assertEquals(expected, ((JLabel) labelField.get(cards.get(0))).getText());
+                }
+                catch (Exception error)
+                {
+                    throw new AssertionError(error);
+                }
+            });
+        }
+        finally
+        {
+            SwingUtilities.invokeAndWait(() -> panel[0].dispose());
+        }
     }
 
     @SuppressWarnings("unchecked")

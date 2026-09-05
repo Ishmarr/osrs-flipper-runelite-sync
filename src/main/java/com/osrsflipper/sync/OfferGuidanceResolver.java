@@ -43,7 +43,7 @@ final class OfferGuidanceResolver
         {
             return existingLowestSellPrice;
         }
-        return SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+        return GeTax.calculateLowestBreakEvenSellPrice(
             buyPrice,
             itemId);
     }

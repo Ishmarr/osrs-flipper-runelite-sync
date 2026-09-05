@@ -23,7 +23,7 @@ public class BuyLimitPresentationTest
     {
         RuneliteOverviewView.Opportunity opportunity = opportunity(
             250, 100, 70, 30);
-        long profitPerItem = SessionStatsTracker.calculateProfitPerItem(
+        long profitPerItem = GeTax.calculateProfitPerItem(
             opportunity.buyPrice,
             opportunity.sellPrice,
             opportunity.itemId);

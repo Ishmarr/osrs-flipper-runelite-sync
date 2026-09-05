@@ -4,7 +4,6 @@ import com.google.gson.Gson;
 import java.awt.Component;
 import java.awt.Container;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.SwingUtilities;
@@ -21,7 +20,7 @@ public class PeriodStatsAttributionTest
     @Test
     public void absentAvailabilityFlagKeepsLegacyCompletePeriodsCompatible() throws Exception
     {
-        Object response = parse(payload(COMPLETE));
+        WorkerOverviewResponse response = parse(payload(COMPLETE));
         assertTrue(isComplete(response));
         RuneliteOverviewView view = toView(response);
         assertTrue(view.today.attributionComplete);
@@ -34,7 +33,7 @@ public class PeriodStatsAttributionTest
     @Test
     public void explicitlyUnavailablePeriodAllowsMissingNumbersWithoutBlockingOtherOverviewData() throws Exception
     {
-        Object response = parse(payload("{\"attribution_complete\":false}"));
+        WorkerOverviewResponse response = parse(payload("{\"attribution_complete\":false}"));
         assertTrue(isComplete(response));
         RuneliteOverviewView view = toView(response);
         assertFalse(view.today.attributionComplete);
@@ -136,23 +135,19 @@ public class PeriodStatsAttributionTest
             "\"cash\":{\"available\":1000,\"reserved\":0,\"available_plus_reserved\":1000,\"updated_at\":100}}";
     }
 
-    private static Object parse(String value) throws Exception
+    private static WorkerOverviewResponse parse(String value)
     {
-        return new Gson().fromJson(value, Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$OverviewResponse"));
+        return new Gson().fromJson(value, WorkerOverviewResponse.class);
     }
 
-    private static boolean isComplete(Object response) throws Exception
+    private static boolean isComplete(WorkerOverviewResponse response)
     {
-        Method method = response.getClass().getDeclaredMethod("isComplete");
-        method.setAccessible(true);
-        return (Boolean) method.invoke(response);
+        return response.isComplete();
     }
 
-    private static RuneliteOverviewView toView(Object response) throws Exception
+    private static RuneliteOverviewView toView(WorkerOverviewResponse response)
     {
-        Method method = response.getClass().getDeclaredMethod("toView");
-        method.setAccessible(true);
-        return (RuneliteOverviewView) method.invoke(response);
+        return response.toView();
     }
 
     private static Object field(Object target, String name) throws Exception

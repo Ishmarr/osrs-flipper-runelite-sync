@@ -115,7 +115,7 @@ public class OfferGuidanceResolverTest
     @Test
     public void buyPriceAndLowestPriceAreCapturedOnceAndSurviveBuyRepricing()
     {
-        int frozenFloor = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
+        int frozenFloor = GeTax.calculateLowestBreakEvenSellPrice(
             9_398,
             5952);
         assertEquals(9_589, frozenFloor);

@@ -50,6 +50,15 @@ public class GeSlotTimerViewTest
     }
 
     @Test
+    public void formatsSidebarDurationsWithoutWrappingAtOneDay()
+    {
+        GeSlotTimerView timer = GeSlotTimerView.create("buy", 1_000, 0);
+        assertEquals("00:00:00", timer.timerText(1_000));
+        assertEquals("01:01:01", timer.timerText(4_661));
+        assertEquals("27:00:00", timer.timerText(98_200));
+    }
+
+    @Test
     public void rejectsUnknownSideAndMissingStartTime()
     {
         assertNull(GeSlotTimerView.create("trade", 1_000, 0));

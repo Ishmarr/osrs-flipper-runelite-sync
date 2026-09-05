@@ -1,6 +1,17 @@
-# OSRS Flipper Sync v5.2.32
+# OSRS Flipper Sync v5.2.33
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.33 — P3-auditfixes
+
+Alle vier Low-punten (17–20) zijn afgehandeld. Zie [het P3-overzicht](AUDIT-P3.md).
+
+- Eén paneelrefresh verwerkt slots, flips, persoonlijke prijzen, itemadvies en foutstatus samen op de Swing-thread. Iedere kaartsectie wordt eenmaal opgebouwd.
+- Een Wiki-aanvraag voor een item dat al wordt opgehaald, wordt niet nogmaals ingepland. Een nieuwe expliciete verversing na afloop blijft mogelijk; accountwissels, annulering en herstel blijven afgeschermd.
+- Sidebar en GE-overlay gebruiken dezelfde timerbasis, inclusief resets bij partial fills en stoppen bij completion/cancel. De oorspronkelijke orderstart blijft beschikbaar voor voorraad- en synchronisatielogica.
+- Ongebruikte lokale sessiestatistieken en voorraadadministratie zijn verwijderd. De bestaande GE-belastingberekeningen staan in `GeTax`; de overview-validatie en modelconversie staan in `WorkerOverviewResponse`. Accountstatistieken blijven van de Worker komen.
+
+Deze wijzigingen werken lokaal en voegen geen Cloudflare-verkeer of diensten toe. De regressies voor de volledige flipsroute uit 5.2.32 blijven onderdeel van elke build.
 
 ## 5.2.32 — Herstel van verdwijnende flips
 
@@ -323,7 +334,9 @@ De zichtbare pluginconfig bevat uitsluitend:
 
 Er staat geen gedeelde Cloudflare-secret, Access-token, client-secret of API-key in de broncode of zichtbare configuratie.
 
-Na een geslaagde eenmalige koppeling geeft de Worker een unieke apparaattoken uit. RuneLite bewaart die token verborgen als secret-configwaarde. De token heeft alleen toegang tot de beperkte `/runelite-api/*`-functies van het gekoppelde account en kan via de webapp worden ingetrokken.
+Na een geslaagde eenmalige koppeling geeft de Worker een unieke apparaattoken uit. De plugin bewaart die lokaal onder de RuneLite-map in `osrs-flipper-sync/outbox/credentials`, met bestandstoegang uitsluitend voor de eigenaar. De token is gebonden aan het RuneLite-profiel, de HTTPS-origin van de webapp, de gekoppelde gebruiker en het apparaat. Nieuwe tokens komen niet in RuneLite's configuratiesynchronisatie of DEBUG-logs. De token heeft alleen toegang tot de beperkte `/runelite-api/*`-functies van het gekoppelde account en kan via de webapp worden ingetrokken.
+
+Een oude koppeling zonder vastgelegde origin moet eenmaal opnieuw worden gekoppeld. Ook een ander RuneLite-profiel, webapp-origin of gekoppeld apparaat vereist een bijpassende koppeling; de plugin gebruikt de bestaande token niet voor een andere context.
 
 ## Apparaat koppelen
 
@@ -354,6 +367,8 @@ De plugin verstuurt geen RuneScape-wachtwoord, Jagex-inloggegevens, bankinhoud, 
 Op Windows start `start-runelite-testclient.cmd` vanuit zijn eigen checkout en gebruikt je bestaande `JAVA_HOME` of `PATH`. Als beide ontbreken, zoekt de starter een JDK van Java 17 of hoger in `%USERPROFILE%\.jdks`, zonder je systeeminstellingen te wijzigen. Met `start-runelite-testclient.cmd -CheckJava` controleer je de gevonden Java-runtime zonder RuneLite te starten. De normale start schakelt RuneLite DEBUG-logging niet in. De optie **Uitgebreide logging** in de plugin blijft beschikbaar voor diagnose.
 
 RuneLite is vastgezet op `1.12.37`; `gradle.lockfile` legt de transitive dependencyversies vast en `mavenLocal()` wordt niet gebruikt. De wrapper controleert de officiële SHA-256 van Gradle 9.6.0. Een gewone controle is `gradlew.bat build`; na een bewuste dependency-update vernieuw je de locks met `gradlew.bat build --write-locks` en bekijk je het verschil. De ontwikkelstarter is uitgesloten van JUnit, terwijl een lege testsuite de build laat falen.
+
+De automatische tests krijgen bij iedere uitvoering een nieuw profiel onder `build/test-runtime`, met een eigen thuismap, tijdelijke bestanden en testlogging. Ze gebruiken geen echt RuneLite-profiel of echte `client.log`. De taak `run` en de Windows-starter openen wel de gewone lokale RuneLite-testclient met je bestaande profiel. Controleer vóór publicatie de volledige geïsoleerde regressiesuite, inclusief de route van overviewrequest en asynchrone callback tot het Flips-paneel, requestaantallen en accountwissels. De eigen GitHub-repository voert dezelfde build automatisch uit bij pushes en pull requests naar `main`.
 
 ## Publicatiebeleid
 

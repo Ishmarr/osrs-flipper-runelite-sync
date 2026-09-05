@@ -51,11 +51,11 @@ public class OverviewFailureRegressionTest
     @Test
     public void missingQuantityInOtherwiseValidRowIsUnknownNotZero() throws Exception
     {
-        Class<?> type = nested("OpportunityData");
-        Object dto = new Gson().fromJson("{\"item_id\":385,\"buy_price\":1811}", type);
-        Method toView = type.getDeclaredMethod("toView");
-        toView.setAccessible(true);
-        assertFalse(((RuneliteOverviewView.Opportunity) toView.invoke(dto)).hasQuantity());
+        WorkerOverviewResponse response = new Gson().fromJson(completePayload().replace(
+            "\"hourly\":[]", "\"hourly\":[{\"item_id\":385,\"buy_price\":1811}]"),
+            WorkerOverviewResponse.class);
+        assertTrue(response.isComplete());
+        assertFalse(response.toView().opportunityForItem(385).hasQuantity());
     }
 
     @Test
@@ -110,12 +110,9 @@ public class OverviewFailureRegressionTest
     @Test
     public void completeZeroStatsAreValidButMissingNumbersAreNot() throws Exception
     {
-        Class<?> type = nested("OverviewResponse");
-        Method complete = type.getDeclaredMethod("isComplete");
-        complete.setAccessible(true);
-        assertTrue((Boolean) complete.invoke(new Gson().fromJson(completePayload(), type)));
-        assertFalse((Boolean) complete.invoke(new Gson().fromJson(
-            completePayload().replace("\"roi_percent\":0,", ""), type)));
+        assertTrue(new Gson().fromJson(completePayload(), WorkerOverviewResponse.class).isComplete());
+        assertFalse(new Gson().fromJson(completePayload().replace("\"roi_percent\":0,", ""),
+            WorkerOverviewResponse.class).isComplete());
     }
 
     @Test
@@ -140,14 +137,9 @@ public class OverviewFailureRegressionTest
                 "\"personal_data\":true,\"market_data\":false," +
                 "\"opportunities\":false,\"degraded\":true," +
                 "\"error_code\":\"market_deadline_exceeded\"}");
-        Class<?> type = nested("OverviewResponse");
-        Object response = new Gson().fromJson(degraded, type);
-        Method available = type.getDeclaredMethod("opportunitiesAvailable");
-        available.setAccessible(true);
-        assertFalse((Boolean) available.invoke(response));
-        Method toView = type.getDeclaredMethod("toView", RuneliteOverviewView.class);
-        toView.setAccessible(true);
-        RuneliteOverviewView current = (RuneliteOverviewView) toView.invoke(response, previous);
+        WorkerOverviewResponse response = new Gson().fromJson(degraded, WorkerOverviewResponse.class);
+        assertFalse(response.opportunitiesAvailable());
+        RuneliteOverviewView current = response.toView(previous);
         assertNotSame(previous, current);
         assertSame(retained, current.opportunityForItem(385));
         assertEquals(0, current.today.realizedProfit);

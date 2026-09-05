@@ -19,7 +19,11 @@
 
 ## Vereisten vóór publicatie
 
-Gebruik de Worker-versie die bij de huidige RuneLite-release hoort en voer alle stabiliteitstesten uit met de huidige IntelliJ-testclient. Publiceer pas wanneer apparaatkoppeling, onmiddellijke wijzigingen, volledige snapshots, retries en serverreconciliatie betrouwbaar werken.
+Voer vóór publicatie `gradlew.bat build` uit met JDK 17 of hoger. De volledige regressiesuite gebruikt een nieuw geïsoleerd RuneLite-profiel onder `build/test-runtime`; de echte configuratie, tokens en `client.log` blijven buiten de tests. De eigen GitHub-repository voert deze build ook automatisch uit bij pushes en pull requests naar `main`.
+
+Controleer de volledige overview-route van request en asynchrone callback tot het Flips-paneel: de volledige lijst, itemselectie en sluiten, vertraagde antwoorden, lege/oude/ongeldige marktdata en automatisch herstel. Controleer daarbij requestaantallen en accountwissels. Test ook apparaatkoppeling, onmiddellijke GE-wijzigingen, volledige snapshots, retries en serverreconciliatie. De onderstaande handmatige stappen gebruiken de lokale RuneLite-testclient met het bestaande profiel.
+
+Een pluginupdate vereist alleen een Worker-update als het API-contract dat expliciet nodig maakt. De auditfixes gebruiken de bestaande Worker; Cloudflare blijft Free voor twee gebruikers.
 
 ## Testvolgorde
 
@@ -55,20 +59,19 @@ Gebruik de Worker-versie die bij de huidige RuneLite-release hoort en voer alle 
 4. Laat RuneScape online, maar blokkeer tijdelijk alleen het webapp-/Worker-adres, bijvoorbeeld via het Windows `hosts`-bestand.
 5. Plaats of wijzig een GE-offer en herstel daarna de toegang tot de Worker.
 6. Controleer dat de lokale wachtrij automatisch wordt afgewerkt en dat de status na de back-off herstelt.
-7. Laat RuneLite minstens tien minuten open en controleer heartbeats en periodieke snapshots.
+7. Laat RuneLite minstens tien minuten open en controleer heartbeats en de lokale slotcontrole iedere vijf minuten. Een ongewijzigde veiligheidssnapshot gaat maximaal eenmaal per uur naar de Worker; die hoeft binnen deze tien minuten dus niet zichtbaar te zijn.
 
 ### 5. Diagnose
 
 Schakel **Uitgebreide logging** alleen tijdelijk in wanneer een test faalt. Controleer `client.log` op pairing, heartbeat, individuele events, volledige snapshots, retries en serververschillen. Schakel logging daarna opnieuw uit.
 
-## GitHub-repository voorbereiden
+## Publiceren naar de eigen GitHub-repository
 
-1. Maak een publieke repository, bijvoorbeeld `osrs-flipper-runelite-sync`.
-2. Plaats alle bestanden uit deze projectmap in de repositoryroot.
-3. Vul desgewenst een support- of issueslink aan in de README.
-4. Controleer dat `icon.png` maximaal 48 × 72 pixels is.
-5. Commit en push de geteste versie.
-6. Noteer de volledige commit-hash van 40 tekens.
+1. Gebruik de bestaande repository [Ishmarr/osrs-flipper-runelite-sync](https://github.com/Ishmarr/osrs-flipper-runelite-sync); controleer dat `origin` hiernaar verwijst.
+2. Controleer dat pluginversie, `build.gradle`, `runelite-plugin.properties` en de README dezelfde release beschrijven.
+3. Voer de volledige build en regressiesuite uit en bekijk de wijzigingen die in de commit komen. Lokale profielen, tokens, journals, testuitvoer en logs horen niet in de commit.
+4. Commit en push de geteste broncode wanneer de eigenaar publicatie heeft toegestaan.
+5. Controleer dat de automatische GitHub-build voor die commit slaagt en noteer de volledige commit-hash van 40 tekens.
 
 ## De bijgewerkte plugin gebruiken
 
