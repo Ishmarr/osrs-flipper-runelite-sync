@@ -1,4 +1,6 @@
-# Fase 4 – gewone RuneLite-client en Plugin Hub
+# Fase 4 – lokale RuneLite-testclient en eigen GitHub-repository
+
+**Harde instructie van de eigenaar: nooit iets bij de RuneLite Plugin Hub indienen.** Geen Plugin Hub-pull requests, manifestupdates of publicatieaanvragen. Een deploymentverzoek heft dit verbod niet op. Cloudflare moet Free blijven; het project wordt door twee mensen gebruikt.
 
 ## Belangrijke release-eigenschappen
 
@@ -9,7 +11,6 @@
 - uitgebreide logging blijft optioneel;
 - **Apparaat koppelen** en **Opnieuw synchroniseren** staan als echte knoppen in een eigen RuneLite-zijpaneel;
 - bestaande v4-apparaattokens blijven behouden doordat configgroep en geheime tokensleutel ongewijzigd zijn;
-- metadata, licentie en projectstructuur zijn voorbereid voor de RuneLite Plugin Hub;
 - de handmatige synchronisatiestatus eindigt na bevestiging op **Synchronisatie voltooid**;
 - het RuneLite-icoon is hetzelfde als het app-icoon;
 - geserialiseerde aanvragen en exponentiële back-off voorkomen een retry-storm bij Cloudflare 503/1102;
@@ -68,30 +69,12 @@ Schakel **Uitgebreide logging** alleen tijdelijk in wanneer een test faalt. Cont
 5. Commit en push de geteste versie.
 6. Noteer de volledige commit-hash van 40 tekens.
 
-## Plugin Hub indienen
+## De bijgewerkte plugin gebruiken
 
-1. Fork `runelite/plugin-hub`.
-2. Maak een nieuwe branch.
-3. Voeg onder `plugins/` een bestand toe, bijvoorbeeld `osrs-flipper-sync`, met:
+1. Sluit de actieve RuneLite-testclient nadat wachtende synchronisatie is afgerond.
+2. Gebruik de bijgewerkte versie van dit project.
+3. Start de Gradle-taak `run`, of gebruik de bestaande lokale testclient-launcher die naar deze projectmap verwijst.
+4. Controleer de pluginversie in de opstartlog en de verbindingsstatus in het zijpaneel.
+5. Koppel alleen opnieuw wanneer de bestaande koppeling ongeldig of ingetrokken is.
 
-```text
-repository=https://github.com/JOUW-GITHUB-ACCOUNT/osrs-flipper-runelite-sync.git
-commit=VOLLEDIGE_COMMIT_HASH_VAN_40_TEKENS
-```
-
-4. Commit dit manifestbestand.
-5. Open een pull request naar de officiële Plugin Hub.
-6. Los eventuele build- of reviewopmerkingen op en werk bij elke nieuwe plugincommit ook de manifest-hash bij.
-
-## Na goedkeuring
-
-Na merge verschijnt de plugin in de gewone RuneLite Plugin Hub. Arno kan hem dan installeren via:
-
-1. RuneLite openen;
-2. Configuration openen;
-3. onderaan **Plugin Hub** kiezen;
-4. zoeken naar **OSRS Flipper Sync**;
-5. installeren en inschakelen;
-6. alleen bij een nieuwe of ingetrokken koppeling op **Apparaat koppelen** drukken.
-
-Vanaf dat moment is de IntelliJ-testclient niet meer nodig voor normaal gebruik. Bewaar het ontwikkelproject wel voor toekomstige updates en Plugin Hub-reviews.
+Een push naar de eigen GitHub-repository wijzigt geen reeds geopende RuneLite-client. Nieuwe code wordt bij een herstart geladen. Publicatie via de RuneLite Plugin Hub is verboden.

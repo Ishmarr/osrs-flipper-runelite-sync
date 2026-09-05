@@ -126,14 +126,14 @@ public class OverviewFailureRegressionTest
     public void accountTransitionDiscardsPendingAndInFlightCashValues() throws Exception
     {
         OsrsFlipperSyncPlugin plugin = plugin();
-        set(plugin, "pendingCashBalance", 1234L);
-        set(plugin, "cashInFlightBalance", 1200L);
+        set(plugin, "pendingCashUpdate", PendingCashUpdate.create(1234L));
+        set(plugin, "cashInFlightUpdate", PendingCashUpdate.create(1200L));
         set(plugin, "cashInFlight", true);
         Method clear = OsrsFlipperSyncPlugin.class.getDeclaredMethod("clearAccountScopedCashQueue");
         clear.setAccessible(true);
         clear.invoke(plugin);
-        assertNull(get(plugin, "pendingCashBalance"));
-        assertNull(get(plugin, "cashInFlightBalance"));
+        assertNull(get(plugin, "pendingCashUpdate"));
+        assertNull(get(plugin, "cashInFlightUpdate"));
         assertFalse((Boolean) get(plugin, "cashInFlight"));
     }
 

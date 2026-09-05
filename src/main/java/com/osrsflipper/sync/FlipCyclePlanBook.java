@@ -264,6 +264,76 @@ final class FlipCyclePlanBook
         return cycle == null ? null : cycle.copy();
     }
 
+    /**
+     * A matching server slot can identify the same offer by a different ID.
+     * Keep the local cycle key (and all its sell links) stable, but replace the
+     * cumulative observation key so the next fill is not counted as a new buy.
+     */
+    void adoptOfferIdentity(
+        String cycleId, int itemId, String side, String previousOfferId, String serverOfferId)
+    {
+        Cycle cycle = cycles.get(clean(cycleId));
+        String previousId = clean(previousOfferId);
+        String serverId = clean(serverOfferId);
+        if (cycle == null || cycle.itemId != itemId || previousId.isEmpty() ||
+            serverId.isEmpty() || previousId.equals(serverId))
+        {
+            return;
+        }
+        if ("buy".equals(side))
+        {
+            Integer previousFill = cycle.buyFills.remove(previousId);
+            if (previousFill != null)
+            {
+                cycle.buyFills.merge(serverId, previousFill, Math::max);
+            }
+            if (previousId.equals(cycle.currentBuyOfferId))
+            {
+                cycle.currentBuyOfferId = serverId;
+            }
+        }
+        else if ("sell".equals(side))
+        {
+            Sale previousSale = cycle.sales.remove(previousId);
+            if (previousSale == null)
+            {
+                return;
+            }
+            previousSale.offerId = serverId;
+            Sale serverSale = cycle.sales.get(serverId);
+            if (serverSale == null)
+            {
+                cycle.sales.put(serverId, previousSale);
+                return;
+            }
+            serverSale.totalQuantity = Math.max(serverSale.totalQuantity, previousSale.totalQuantity);
+            serverSale.filledQuantity = Math.max(serverSale.filledQuantity, previousSale.filledQuantity);
+            if (previousSale.lastEventAt > serverSale.lastEventAt ||
+                (previousSale.lastEventAt == serverSale.lastEventAt && !previousSale.isOpen()))
+            {
+                serverSale.status = previousSale.status;
+            }
+            serverSale.lastEventAt = Math.max(serverSale.lastEventAt, previousSale.lastEventAt);
+        }
+    }
+
+    void adoptFrozenBuyPlan(String cycleId, int serverBuyPrice, int serverLowestSellPrice)
+    {
+        Cycle cycle = cycles.get(clean(cycleId));
+        if (cycle == null || cycle.isClosed())
+        {
+            return;
+        }
+        if (serverBuyPrice > 0)
+        {
+            cycle.frozenBuyPrice = serverBuyPrice;
+        }
+        if (serverLowestSellPrice > 0)
+        {
+            cycle.lowestSellPrice = serverLowestSellPrice;
+        }
+    }
+
     int size()
     {
         return cycles.size();

@@ -225,31 +225,6 @@ public class SnapshotSchedulingRegressionTest
     }
 
     @Test
-    public void fullOutboxForcesRecoverableSnapshotInsteadOfSilentLoss() throws Exception
-    {
-        OsrsFlipperSyncPlugin plugin = new OsrsFlipperSyncPlugin();
-        Deque<Object> outbox = outbox(plugin);
-        for (int index = 0; index < 500; index++)
-        {
-            outbox.addLast(newNested("QueuedEvent"));
-        }
-        set(plugin, "fullSnapshotTicks", 321);
-        Object event = newNested("SyncEvent");
-        set(event, "eventId", "overflow-event");
-
-        Method enqueue = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
-            "enqueue",
-            event.getClass());
-        enqueue.setAccessible(true);
-        enqueue.invoke(plugin, event);
-
-        assertEquals(500, outbox.size());
-        assertTrue(booleanField(plugin, "snapshotPending"));
-        assertEquals("outbox_overflow", field(plugin, "snapshotReason"));
-        assertEquals(0, intField(plugin, "fullSnapshotTicks"));
-    }
-
-    @Test
     public void pluginWiresEveryTriggerToTheIntendedSnapshotMode() throws Exception
     {
         String source = new String(Files.readAllBytes(Paths.get(
@@ -264,9 +239,9 @@ public class SnapshotSchedulingRegressionTest
             "\"periodic_hourly\", SnapshotSyncPolicy.ReconcileMode.ALWAYS"));
         assertTrue(compact.contains(
             "requestInFlight || loginReconciliationPending || " +
-                "(!outbox.isEmpty() && !continuingDurableSnapshot)"));
+                "(hasQueuedEvents() && !continuingDurableSnapshot)"));
         assertTrue(compact.contains(
-            "anyWorkerRequestInFlight() || loginReconciliationPending || !outbox.isEmpty()"));
+            "anyWorkerRequestInFlight() || loginReconciliationPending || hasQueuedEvents()"));
     }
 
     private static OsrsFlipperSyncPlugin pluginWaitingForSnapshot(String snapshotId) throws Exception

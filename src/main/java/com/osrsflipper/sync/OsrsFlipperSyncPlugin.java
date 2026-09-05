@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -15,6 +16,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -36,6 +38,7 @@ import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.api.events.VarClientIntChanged;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -79,7 +82,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.29";
+    private static final String PLUGIN_VERSION = "5.2.30";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -155,6 +158,22 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private final Map<Integer, SlotSnapshot> slotSnapshots = new HashMap<>();
     private final Deque<QueuedEvent> outbox = new ArrayDeque<>();
+    // The deque is only the next delivery window. The journal owns all events.
+    private final Deque<SyncEvent> unjournaledEvents = new ArrayDeque<>();
+    private final Map<String, AccountState> unsavedAccounts = new HashMap<>();
+    private Path eventJournalRoot;
+    private EventJournal eventJournal;
+    private SyncStorageContext activeStorageContext;
+    private String activeConfigProfileKey;
+    private String legacyConfigProfileKey;
+    private String legacyConnectionKey;
+    private String proposedLegacyConnectionKey;
+    private long journalSize;
+    private long storageRetryAt;
+    private boolean storageBlocked;
+    private boolean storageInitialized;
+    private boolean updatingPairing;
+    private String lastPersistedStateJson;
     private final Map<Integer, MarketPriceView> marketPrices = new HashMap<>();
     private final Deque<Integer> marketPriceQueue = new ArrayDeque<>();
     private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
@@ -210,8 +229,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean overviewFreshBuyLimitsPending;
     private boolean overviewInFlightFreshMarket;
     private boolean overviewInFlightFreshBuyLimits;
-    private Long pendingCashBalance;
-    private Long cashInFlightBalance;
+    private PendingCashUpdate pendingCashUpdate;
+    private PendingCashUpdate cashInFlightUpdate;
     private boolean workerPumpActive;
     private int overviewTicks;
     private int forcedOverviewDelayTicks;
@@ -266,8 +285,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewFreshBuyLimitsPending = false;
         overviewInFlightFreshMarket = false;
         overviewInFlightFreshBuyLimits = false;
-        pendingCashBalance = null;
-        cashInFlightBalance = null;
+        pendingCashUpdate = null;
+        cashInFlightUpdate = null;
         workerPumpActive = false;
         overviewTicks = OVERVIEW_GAME_TICKS;
         forcedOverviewDelayTicks = 0;
@@ -320,6 +339,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         panel = null;
 
         persistCurrentAccount();
+        if (activeStorageContext != null && storageBlocked)
+        {
+            unsavedAccounts.put(activeStorageContext.accountKey,
+                gson.fromJson(gson.toJson(captureAccountState()), AccountState.class));
+        }
         started = false;
         requestInFlight = false;
         pairingInFlight = false;
@@ -356,8 +380,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewFreshBuyLimitsPending = false;
         overviewInFlightFreshMarket = false;
         overviewInFlightFreshBuyLimits = false;
-        pendingCashBalance = null;
-        cashInFlightBalance = null;
+        pendingCashUpdate = null;
+        cashInFlightUpdate = null;
         workerPumpActive = false;
         overviewTicks = 0;
         forcedOverviewDelayTicks = 0;
@@ -368,6 +392,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         focusedExistingSlot = 0;
         overview = RuneliteOverviewView.empty();
         activeAccountHash = NO_ACCOUNT;
+        activeStorageContext = null;
+        eventJournal = null;
+        storageInitialized = false;
+        unjournaledEvents.clear();
         LOG.info("OSRS Flipper Sync gestopt");
     }
 
@@ -585,6 +613,23 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
+        if (!started || updatingPairing)
+        {
+            return;
+        }
+        if ("webappAddress".equals(event.getKey()) || "ownerEmail".equals(event.getKey()) ||
+            "deviceId".equals(event.getKey()) || "deviceToken".equals(event.getKey()))
+        {
+            // Reconcile once on the client thread, after all fields of a pair
+            // response have been stored. Delivery checks the captured identity too.
+            clientThread.invokeLater(() ->
+            {
+                if (started)
+                {
+                    switchToCurrentAccount();
+                }
+            });
+        }
         if ("webappAddress".equals(event.getKey()))
         {
             // Responses van het vorige endpoint horen niet bij de nieuwe
@@ -811,7 +856,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 return;
             }
 
-            if (pair == null || isBlank(pair.device_token) || isBlank(pair.device_id))
+            if (pair == null || isBlank(pair.device_token) || isBlank(pair.device_id) || isBlank(pair.owner_email))
             {
                 setConnectionStatus("Koppelen mislukt: token ontbreekt");
                 return;
@@ -819,11 +864,27 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
             // Een eventueel nog lopende overview gebruikte de vorige token.
             // Laat die response nooit in de nieuwe koppeling terechtkomen.
+            ensureLegacyConnectionBinding();
+            if (legacyConnectionKey == null)
+            {
+                setConnectionStatus("Koppeling niet opgeslagen: herstel eerst de lokale opslag en gebruik daarna een nieuwe code");
+                return;
+            }
+            persistCurrentAccount();
             invalidateOverviewContext();
-            setStoredValue("deviceToken", pair.device_token);
-            setStoredValue("deviceId", pair.device_id);
-            setStoredValue("ownerEmail", trim(pair.owner_email).toLowerCase());
-            setStoredValue("linkedAt", Long.toString(pair.linked_at));
+            updatingPairing = true;
+            try
+            {
+                setStoredValue("deviceToken", pair.device_token);
+                setStoredValue("deviceId", pair.device_id);
+                setStoredValue("ownerEmail", trim(pair.owner_email).toLowerCase(Locale.ROOT));
+                setStoredValue("linkedAt", Long.toString(pair.linked_at));
+            }
+            finally
+            {
+                updatingPairing = false;
+            }
+            switchToCurrentAccount();
             setConnectionStatus("Gekoppeld met " + displayOwner(pair.owner_email));
             statusCheckPending = false;
             statusRetryAttempts = 0;
@@ -857,7 +918,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void checkDeviceStatus()
     {
         if (!started || !statusCheckPending || statusInFlight || !hasDeviceToken() || anyWorkerRequestInFlight() ||
-            !outbox.isEmpty() || snapshotPending || manualSyncPending || serverStateCheckPending)
+            hasQueuedEvents() || snapshotPending || manualSyncPending || serverStateCheckPending)
         {
             return;
         }
@@ -938,8 +999,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 StatusResponse status = gson.fromJson(body, StatusResponse.class);
                 if (status != null && status.owner != null && !isBlank(status.owner.email))
                 {
-                    owner = trim(status.owner.email).toLowerCase();
+                    owner = trim(status.owner.email).toLowerCase(Locale.ROOT);
                     setStoredValue("ownerEmail", owner);
+                    switchToCurrentAccount();
                 }
             }
             catch (RuntimeException exception)
@@ -979,7 +1041,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void sendHeartbeat()
     {
         if (!started || heartbeatInFlight || !hasDeviceToken() || anyWorkerRequestInFlight() ||
-            !outbox.isEmpty() || snapshotPending || manualSyncPending || serverStateCheckPending)
+            hasQueuedEvents() || snapshotPending || manualSyncPending || serverStateCheckPending)
         {
             return;
         }
@@ -1466,21 +1528,20 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void enqueue(SyncEvent event)
     {
-        if (outbox.size() >= MAX_OUTBOX_SIZE)
+        if (activeStorageContext != null)
         {
-            queueFullSnapshot("outbox_overflow");
-            preemptOverviewForGeDelivery();
-            LOG.error(
-                "Synchronisatiewachtrij is vol; event {} wordt via een herstelsnapshot gereconcilieerd",
-                event.eventId);
-            return;
+            // Retain in RAM first as well: disk failures must be visible and must
+            // not discard the incoming event or let later events overtake it.
+            unjournaledEvents.addLast(event);
+            storeUnjournaledEvents();
         }
-
-        QueuedEvent queued = new QueuedEvent();
-        queued.event = event;
-        queued.attempts = 0;
-        queued.nextAttemptAt = 0;
-        outbox.addLast(queued);
+        else
+        {
+            // Before an account context is available no delivery can occur.
+            QueuedEvent queued = new QueuedEvent();
+            queued.event = event;
+            outbox.addLast(queued);
+        }
         preemptOverviewForGeDelivery();
         if (snapshotInFlight || pendingSnapshot != null)
         {
@@ -1496,6 +1557,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void flushOutboxIfPossible()
     {
+        if (!prepareStorageForDelivery())
+        {
+            return;
+        }
         if (!started || workerRequests.isActive() || requestInFlight ||
             activeAccountHash == NO_ACCOUNT || !hasDeviceToken() ||
             statusInFlight || heartbeatInFlight || snapshotInFlight || slotStateInFlight || pairingInFlight ||
@@ -1513,7 +1578,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (outbox.isEmpty())
+        if (!hasQueuedEvents())
         {
             sendFullSnapshotIfPossible();
             return;
@@ -1612,7 +1677,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 return;
             }
             markWorkerSuccess();
-            outbox.removeFirst();
+            if (!acknowledgeQueuedEvent(eventId))
+            {
+                return;
+            }
             if (successfulBuyLimitEvent(queued.event, syncResponse))
             {
                 outboxBatchBuyLimitDirty = true;
@@ -1650,7 +1718,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         if (statusCode >= 400 && statusCode < 500 && statusCode != 408 && statusCode != 429)
         {
-            outbox.removeFirst();
+            if (!acknowledgeQueuedEvent(eventId))
+            {
+                return;
+            }
             serverStateCheckPending = true;
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
@@ -1674,7 +1745,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         boolean continuingDurableSnapshot = pendingSnapshot != null;
         if (!snapshotPending || workerRequests.isActive() || snapshotInFlight || requestInFlight ||
             loginReconciliationPending ||
-            (!outbox.isEmpty() && !continuingDurableSnapshot) ||
+            (hasQueuedEvents() && !continuingDurableSnapshot) ||
             statusInFlight || heartbeatInFlight || slotStateInFlight || pairingInFlight ||
             !hasDeviceToken() || client.getGameState() != GameState.LOGGED_IN || now() < workerBackoffUntil)
         {
@@ -1838,7 +1909,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 {
                     serverStateCheckPending = false;
                     healthSuccess(SyncHealthTracker.Channel.STATE);
-                    if (outbox.isEmpty())
+                    if (!hasQueuedEvents())
                     {
                         healthSuccess(SyncHealthTracker.Channel.EVENTS);
                     }
@@ -1873,7 +1944,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     !stateMatches,
                     snapshotPending,
                     snapshotInFlight,
-                    outbox.isEmpty()))
+                    !hasQueuedEvents()))
                 {
                     finishManualSync();
                 }
@@ -1981,7 +2052,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         if (!serverStateCheckPending || slotStateInFlight || anyWorkerRequestInFlight() ||
             loginReconciliationPending ||
-            !outbox.isEmpty() || snapshotPending || !hasDeviceToken() ||
+            hasQueuedEvents() || snapshotPending || !hasDeviceToken() ||
             client.getGameState() != GameState.LOGGED_IN)
         {
             return;
@@ -2113,12 +2184,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             false,
             snapshotPending,
             snapshotInFlight,
-            outbox.isEmpty()))
+            !hasQueuedEvents()))
         {
             finishManualSync();
         }
         healthSuccess(SyncHealthTracker.Channel.STATE);
-        if (outbox.isEmpty() && !snapshotPending)
+        if (!hasQueuedEvents() && !snapshotPending)
         {
             healthSuccess(SyncHealthTracker.Channel.EVENTS);
         }
@@ -2217,6 +2288,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
         local.serverVersion = Math.max(0, server.version);
         if (!"empty".equals(local.status) && !isBlank(server.runelite_offer_id))
         {
+            FlipCyclePlanBook.Cycle previousCycle = cycleForSnapshot(local);
+            if (previousCycle != null)
+            {
+                // Legacy snapshots may use offerId as their implicit cycle key.
+                // Preserve that link before adopting the server's offer identity.
+                local.sourceBuyOfferId = previousCycle.cycleId;
+                flipCycles.adoptOfferIdentity(
+                    previousCycle.cycleId, local.itemId, local.side,
+                    local.offerId, server.runelite_offer_id);
+            }
             local.offerId = server.runelite_offer_id;
             if (server.started_at > 0)
             {
@@ -2236,9 +2317,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             FlipCyclePlanBook.Cycle linkedCycle = cycleForSnapshot(local);
             boolean linkedCycleClosed = linkedCycle != null && linkedCycle.isClosed();
-            if (server.suggested_buy_price > 0 &&
+            boolean adoptBuyPrice = server.suggested_buy_price > 0 &&
                 !linkedCycleClosed &&
-                (firstServerAdoption || local.suggestedBuyPrice <= 0))
+                (firstServerAdoption || local.suggestedBuyPrice <= 0);
+            if (adoptBuyPrice)
             {
                 local.suggestedBuyPrice = server.suggested_buy_price;
             }
@@ -2256,9 +2338,28 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             if (linkedCycle != null && !linkedCycleClosed)
             {
+                flipCycles.adoptFrozenBuyPlan(
+                    linkedCycle.cycleId,
+                    adoptBuyPrice ? server.suggested_buy_price : 0,
+                    server.lowest_sell_price);
                 flipCycles.raiseSellTarget(
                     linkedCycle.cycleId,
                     local.suggestedSellPrice);
+                FlipCyclePlanBook.Cycle adoptedCycle = flipCycles.cycle(linkedCycle.cycleId);
+                local.suggestedBuyPrice = adoptedCycle.frozenBuyPrice;
+                local.lowestSellPrice = adoptedCycle.lowestSellPrice;
+                // Only live state changes here. Queued events and snapshot
+                // payloads retain the exact data already submitted for replay.
+                for (SlotSnapshot linked : slotSnapshots.values())
+                {
+                    if (linked != null && linked.itemId == local.itemId &&
+                        linkedCycle.cycleId.equals(linked.sourceBuyOfferId))
+                    {
+                        linked.suggestedBuyPrice = adoptedCycle.frozenBuyPrice;
+                        linked.lowestSellPrice = adoptedCycle.lowestSellPrice;
+                        linked.fingerprint = fingerprint(linked);
+                    }
+                }
             }
             local.eventSequence = Math.max(local.eventSequence, server.event_sequence);
             local.lastEventAt = Math.max(local.lastEventAt, server.last_event_at);
@@ -2343,6 +2444,16 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private Call beginWorkerRequest(WorkerRequestCoordinator.Kind kind, Request request)
     {
+        if (kind != WorkerRequestCoordinator.Kind.PAIRING && activeStorageContext != null &&
+            !activeStorageContext.accountKey.equals(SyncStorageContext.capture(config, activeAccountHash).accountKey))
+        {
+            return null;
+        }
+        if ((kind == WorkerRequestCoordinator.Kind.EVENT || kind == WorkerRequestCoordinator.Kind.SNAPSHOT ||
+            kind == WorkerRequestCoordinator.Kind.CASH) && !prepareStorageForDelivery())
+        {
+            return null;
+        }
         Call call = httpClient.newCall(request);
         return workerRequests.begin(kind, call, call::cancel) ? call : null;
     }
@@ -2360,7 +2471,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         try
         {
-            if (completion.shouldHandleResponse())
+            boolean currentContext = kind == WorkerRequestCoordinator.Kind.PAIRING
+                ? Objects.equals(call.request().url(), endpoint(PAIR_PATH))
+                : activeStorageContext == null ||
+                    activeStorageContext.accountKey.equals(SyncStorageContext.capture(config, activeAccountHash).accountKey) &&
+                    Objects.equals(call.request().header("Authorization"), "Bearer " + trim(config.deviceToken()));
+            if (completion.shouldHandleResponse() && currentContext)
             {
                 responseHandler.run();
             }
@@ -2406,7 +2522,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 break;
             case CASH:
                 cashInFlight = false;
-                cashInFlightBalance = null;
+                cashInFlightUpdate = null;
                 break;
             default:
                 break;
@@ -2432,6 +2548,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
+        if (!prepareStorageForDelivery())
+        {
+            return;
+        }
+
         workerPumpActive = true;
         try
         {
@@ -2440,10 +2561,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW));
             WorkerRequestCoordinator.Kind next = nextWorkerRequestKind(
                 pendingSnapshot != null,
-                !outbox.isEmpty(),
+                hasQueuedEvents(),
                 snapshotPending,
                 serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN,
-                pendingCashBalance != null,
+                pendingCashUpdate != null,
                 statusCheckPending,
                 overviewDue,
                 heartbeatNextAttemptAt > 0);
@@ -2622,7 +2743,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void refreshOverviewAfterCompletedOutboxBatch()
     {
         OutboxOverviewRefresh refresh = outboxOverviewRefresh(
-            outbox.isEmpty(),
+            !hasQueuedEvents(),
             outboxBatchBuyLimitDirty);
         if (refresh == OutboxOverviewRefresh.NONE)
         {
@@ -2656,22 +2777,47 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private void switchToCurrentAccount()
     {
         long accountHash = client.getAccountHash();
+        String profileKey = configProfileKey();
+        SyncStorageContext candidate = SyncStorageContext.capture(config, accountHash);
         if (accountHash == -1L)
         {
-            return;
+            // Ordinary logout keeps the current queue. A new connection while
+            // logged out gets its own unbound context, never the old RS account.
+            accountHash = activeStorageContext != null &&
+                activeStorageContext.connectionKey.equals(candidate.connectionKey)
+                ? activeAccountHash : NO_ACCOUNT;
+            candidate = SyncStorageContext.capture(config, accountHash);
         }
-        if (activeAccountHash == accountHash)
+        if (activeStorageContext != null && activeStorageContext.accountKey.equals(candidate.accountKey) &&
+            Objects.equals(activeConfigProfileKey, profileKey))
         {
             return;
         }
 
+        ensureLegacyConnectionBinding();
         persistCurrentAccount();
+        if (activeStorageContext != null && storageBlocked)
+        {
+            // Preserve unwritten data in this process even when the user pairs
+            // another device while their disk is unavailable.
+            unsavedAccounts.put(activeStorageContext.accountKey,
+                gson.fromJson(gson.toJson(captureAccountState()), AccountState.class));
+        }
         slotSnapshots.clear();
         flipCycles.clear();
         outbox.clear();
+        unjournaledEvents.clear();
+        eventJournal = null;
+        journalSize = 0;
+        storageRetryAt = 0;
+        storageBlocked = false;
+        storageInitialized = false;
+        lastPersistedStateJson = null;
         pendingSnapshot = null;
         snapshotSequence = 0;
         activeAccountHash = accountHash;
+        activeStorageContext = candidate;
+        activeConfigProfileKey = profileKey;
         sessionStats.reset();
         lastTradePrices.clear();
         geItemPresence.clear();
@@ -2686,7 +2832,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         overviewTicks = OVERVIEW_GAME_TICKS;
         loadCurrentAccount();
         requestInFlight = false;
-        snapshotPending = true;
+        snapshotPending = activeAccountHash != NO_ACCOUNT || pendingSnapshot != null;
         snapshotReason = "account_switch";
         serverStateCheckPending = true;
         if (client.getGameState() == GameState.LOGGED_IN)
@@ -2704,143 +2850,398 @@ public class OsrsFlipperSyncPlugin extends Plugin
         // Een lopende call wordt door invalidateOverviewContext() geannuleerd. Wis
         // ook de last-write-wins waarden zelf: anders kan de callback na een
         // accountwissel het oude saldo onder het nieuwe account opnieuw aanbieden.
-        pendingCashBalance = null;
-        cashInFlightBalance = null;
+        pendingCashUpdate = null;
+        cashInFlightUpdate = null;
         cashInFlight = false;
         cashRetryAttempts = 0;
     }
 
-    private void loadCurrentAccount()
+    private Path journalRoot()
     {
-        if (activeAccountHash == NO_ACCOUNT)
+        if (eventJournalRoot == null)
+        {
+            eventJournalRoot = RuneLite.RUNELITE_DIR.toPath().resolve("osrs-flipper-sync").resolve("outbox");
+        }
+        return eventJournalRoot;
+    }
+
+    private String configProfileKey()
+    {
+        return configManager == null || configManager.getProfile() == null
+            ? "default" : Long.toUnsignedString(configManager.getProfile().getId());
+    }
+
+    private void ensureLegacyConnectionBinding()
+    {
+        if (configManager == null)
         {
             return;
         }
-
+        String profileKey = configProfileKey();
+        if (!Objects.equals(legacyConfigProfileKey, profileKey))
+        {
+            // Each RuneLite profile has a different legacy configuration file.
+            // Bind the newly selected profile to its own currently stored owner.
+            legacyConfigProfileKey = profileKey;
+            legacyConnectionKey = null;
+            proposedLegacyConnectionKey = SyncStorageContext.capture(config, NO_ACCOUNT).connectionKey;
+        }
+        if (legacyConnectionKey != null)
+        {
+            return;
+        }
         try
         {
-            String statesJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, STATE_PREFIX + accountKey());
-            SlotSnapshot[] states = isBlank(statesJson) ? null : gson.fromJson(statesJson, SlotSnapshot[].class);
-            if (states != null)
+            legacyConnectionKey = EventJournal.claimLegacyConnection(
+                journalRoot(), profileKey, proposedLegacyConnectionKey);
+        }
+        catch (IOException exception)
+        {
+            localStorageFailure(exception);
+        }
+    }
+
+    private void loadCurrentAccount()
+    {
+        if (activeStorageContext == null || configManager == null)
+        {
+            return;
+        }
+        try
+        {
+            List<SyncEvent> waitingEvents = new ArrayList<>(unjournaledEvents);
+            PendingCashUpdate waitingCash = pendingCashUpdate;
+            ensureLegacyConnectionBinding();
+            if (legacyConnectionKey == null)
             {
-                for (SlotSnapshot state : states)
+                throw new IOException("Legacy storage identity has not been bound");
+            }
+            eventJournal = new EventJournal(journalRoot(), activeStorageContext.accountKey);
+            AccountState legacy = null;
+            List<EventJournal.Entry> legacyEvents = new ArrayList<>();
+            if (!eventJournal.legacyImported(activeConfigProfileKey) && activeAccountHash != NO_ACCOUNT &&
+                activeStorageContext.connectionKey.equals(legacyConnectionKey))
+            {
+                String outboxJson = legacyValue(OUTBOX_PREFIX);
+                QueuedEvent[] events = isBlank(outboxJson) ? null : gson.fromJson(outboxJson, QueuedEvent[].class);
+                if (events != null)
                 {
-                    if (state != null && state.slotNumber >= 1 && state.slotNumber <= SLOT_COUNT)
+                    for (QueuedEvent queued : events)
                     {
-                        slotSnapshots.put(state.slotNumber, state);
+                        if (queued == null || queued.event == null || isBlank(queued.event.eventId))
+                        {
+                            throw new IOException("Invalid legacy event; migration stopped without discarding it");
+                        }
+                        legacyEvents.add(new EventJournal.Entry(queued.event.eventId, gson.toJson(queued.event)));
                     }
                 }
+                // Cache corruption must never clear the event history being migrated.
+                legacy = readLegacyAccountState();
             }
-
-            String outboxJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, OUTBOX_PREFIX + accountKey());
-            QueuedEvent[] queuedEvents = isBlank(outboxJson) ? null : gson.fromJson(outboxJson, QueuedEvent[].class);
-            if (queuedEvents != null)
+            eventJournal.importLegacy(legacyEvents, legacy == null ? null : gson.toJson(legacy), activeConfigProfileKey);
+            journalSize = eventJournal.size();
+            refillOutbox();
+            AccountState recovered = unsavedAccounts.get(activeStorageContext.accountKey);
+            if (recovered == null)
             {
-                for (QueuedEvent queued : queuedEvents)
+                String json = eventJournal.readState();
+                recovered = isBlank(json) ? null : gson.fromJson(json, AccountState.class);
+            }
+            if (recovered != null)
+            {
+                unjournaledEvents.clear();
+                restoreAccountState(recovered);
+            }
+            Set<String> waitingIds = new HashSet<>();
+            for (SyncEvent event : unjournaledEvents)
+            {
+                waitingIds.add(event.eventId);
+            }
+            for (SyncEvent event : waitingEvents)
+            {
+                if (waitingIds.add(event.eventId))
                 {
-                    if (queued != null && queued.event != null && outbox.size() < MAX_OUTBOX_SIZE)
-                    {
-                        outbox.addLast(queued);
-                    }
+                    unjournaledEvents.addLast(event);
                 }
             }
-
-            String sequenceValue = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, SNAPSHOT_SEQUENCE_PREFIX + accountKey());
-            snapshotSequence = isBlank(sequenceValue) ? 0 : Math.max(0, Long.parseLong(sequenceValue));
-
-            String pendingJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, PENDING_SNAPSHOT_PREFIX + accountKey());
-            pendingSnapshot = isBlank(pendingJson) ? null : gson.fromJson(pendingJson, PendingSnapshot.class);
-            if (pendingSnapshot != null)
+            if (waitingCash != null)
             {
-                snapshotPending = true;
-                snapshotReason = isBlank(pendingSnapshot.reason) ? "retry" : pendingSnapshot.reason;
+                pendingCashUpdate = waitingCash;
             }
+            storageInitialized = true;
+            storageBlocked = false;
+            storageRetryAt = 0;
+            storeUnjournaledEvents();
+            persistCurrentAccount();
+            if (!storageBlocked)
+            {
+                unsavedAccounts.remove(activeStorageContext.accountKey);
+            }
+        }
+        catch (IOException | RuntimeException exception)
+        {
+            localStorageFailure(exception);
+        }
+    }
 
-            String lastTradePricesJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, LAST_TRADE_PRICES_PREFIX + accountKey());
-            LastTradePriceBook.Entry[] lastTradeEntries = isBlank(lastTradePricesJson)
-                ? null
-                : gson.fromJson(lastTradePricesJson, LastTradePriceBook.Entry[].class);
-            lastTradePrices.restore(lastTradeEntries);
+    private String legacyValue(String prefix)
+    {
+        return configManager.getConfiguration(OsrsFlipperSyncConfig.GROUP, prefix + accountKey());
+    }
 
-            String itemPresenceJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, GE_ITEM_PRESENCE_PREFIX + accountKey());
-            GeItemPresenceBook.Entry[] itemPresenceEntries = isBlank(itemPresenceJson)
-                ? null
-                : gson.fromJson(itemPresenceJson, GeItemPresenceBook.Entry[].class);
-            geItemPresence.restore(itemPresenceEntries);
-
-            String flipCyclesJson = configManager.getConfiguration(
-                OsrsFlipperSyncConfig.GROUP, FLIP_CYCLES_PREFIX + accountKey());
-            FlipCyclePlanBook.Cycle[] persistedCycles = isBlank(flipCyclesJson)
-                ? null
-                : gson.fromJson(flipCyclesJson, FlipCyclePlanBook.Cycle[].class);
-            flipCycles.restore(persistedCycles);
-            recoverFlipCyclesFromSlots();
+    private <T> T readLegacyJson(String prefix, Class<T> type)
+    {
+        try
+        {
+            String value = legacyValue(prefix);
+            return isBlank(value) ? null : gson.fromJson(value, type);
         }
         catch (RuntimeException exception)
         {
-            LOG.error("Lokale GE-synchronisatiestatus kon niet worden gelezen", exception);
-            slotSnapshots.clear();
-            flipCycles.clear();
-            outbox.clear();
-            lastTradePrices.clear();
-            geItemPresence.clear();
+            LOG.warn("Lokale cache {} is onleesbaar; GE-events blijven bewaard", prefix);
+            return null;
+        }
+    }
+
+    private AccountState readLegacyAccountState()
+    {
+        AccountState state = new AccountState();
+        state.slots = readLegacyJson(STATE_PREFIX, SlotSnapshot[].class);
+        state.pendingSnapshot = readLegacyJson(PENDING_SNAPSHOT_PREFIX, PendingSnapshot.class);
+        state.lastTradePrices = readLegacyJson(LAST_TRADE_PRICES_PREFIX, LastTradePriceBook.Entry[].class);
+        state.itemPresence = readLegacyJson(GE_ITEM_PRESENCE_PREFIX, GeItemPresenceBook.Entry[].class);
+        state.cycles = readLegacyJson(FLIP_CYCLES_PREFIX, FlipCyclePlanBook.Cycle[].class);
+        try
+        {
+            String sequence = legacyValue(SNAPSHOT_SEQUENCE_PREFIX);
+            state.snapshotSequence = isBlank(sequence) ? 0 : Math.max(0, Long.parseLong(sequence));
+        }
+        catch (RuntimeException exception)
+        {
+            LOG.warn("Lokale snapshotvolgorde is onleesbaar; bestaande snapshot blijft bewaard");
+        }
+        return state;
+    }
+
+    private AccountState captureAccountState()
+    {
+        AccountState state = new AccountState();
+        state.slots = slotSnapshots.values().toArray(new SlotSnapshot[0]);
+        state.snapshotSequence = snapshotSequence;
+        state.pendingSnapshot = pendingSnapshot;
+        state.lastTradePrices = lastTradePrices.persistedEntries().toArray(new LastTradePriceBook.Entry[0]);
+        state.itemPresence = geItemPresence.persistedEntries().toArray(new GeItemPresenceBook.Entry[0]);
+        state.cycles = flipCycles.persistedCycles();
+        state.pendingCash = pendingCashUpdate;
+        state.unjournaled = unjournaledEvents.toArray(new SyncEvent[0]);
+        return state;
+    }
+
+    private void restoreAccountState(AccountState state)
+    {
+        if (state.slots != null)
+        {
+            for (SlotSnapshot slot : state.slots)
+            {
+                if (slot != null && slot.slotNumber >= 1 && slot.slotNumber <= SLOT_COUNT)
+                {
+                    slotSnapshots.put(slot.slotNumber, slot);
+                }
+            }
+        }
+        snapshotSequence = Math.max(0, state.snapshotSequence);
+        pendingSnapshot = state.pendingSnapshot;
+        if (pendingSnapshot != null)
+        {
+            snapshotPending = true;
+            snapshotReason = isBlank(pendingSnapshot.reason) ? "retry" : pendingSnapshot.reason;
+        }
+        lastTradePrices.restore(state.lastTradePrices);
+        geItemPresence.restore(state.itemPresence);
+        flipCycles.restore(state.cycles);
+        recoverFlipCyclesFromSlots();
+        pendingCashUpdate = state.pendingCash != null && state.pendingCash.isValid() ? state.pendingCash : null;
+        if (state.unjournaled != null)
+        {
+            Collections.addAll(unjournaledEvents, state.unjournaled);
         }
     }
 
     private void persistCurrentAccount()
     {
-        if (activeAccountHash == NO_ACCOUNT)
+        if (activeStorageContext == null || eventJournal == null || !storageInitialized)
         {
             return;
         }
+        try
+        {
+            String json = gson.toJson(captureAccountState());
+            if (!json.equals(lastPersistedStateJson))
+            {
+                eventJournal.writeState(json);
+                lastPersistedStateJson = json;
+            }
+        }
+        catch (IOException | RuntimeException exception)
+        {
+            localStorageFailure(exception);
+        }
+    }
 
-        List<SlotSnapshot> states = new ArrayList<>(slotSnapshots.values());
-        states.sort((left, right) -> Integer.compare(left.slotNumber, right.slotNumber));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            STATE_PREFIX + accountKey(),
-            gson.toJson(states));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            OUTBOX_PREFIX + accountKey(),
-            gson.toJson(new ArrayList<>(outbox)));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            SNAPSHOT_SEQUENCE_PREFIX + accountKey(),
-            Long.toString(Math.max(0, snapshotSequence)));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            PENDING_SNAPSHOT_PREFIX + accountKey(),
-            pendingSnapshot == null ? "" : gson.toJson(pendingSnapshot));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            LAST_TRADE_PRICES_PREFIX + accountKey(),
-            gson.toJson(lastTradePrices.persistedEntries()));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            GE_ITEM_PRESENCE_PREFIX + accountKey(),
-            gson.toJson(geItemPresence.persistedEntries()));
-        configManager.setConfiguration(
-            OsrsFlipperSyncConfig.GROUP,
-            FLIP_CYCLES_PREFIX + accountKey(),
-            gson.toJson(flipCycles.persistedCycles()));
+    private void storeUnjournaledEvents()
+    {
+        if (!storageInitialized || eventJournal == null || (storageBlocked && now() < storageRetryAt))
+        {
+            return;
+        }
+        try
+        {
+            while (!unjournaledEvents.isEmpty())
+            {
+                SyncEvent event = unjournaledEvents.peekFirst();
+                eventJournal.append(event.eventId, gson.toJson(event));
+                unjournaledEvents.removeFirst();
+            }
+            journalSize = eventJournal.size();
+            if (outbox.isEmpty())
+            {
+                refillOutbox();
+            }
+        }
+        catch (IOException | RuntimeException exception)
+        {
+            localStorageFailure(exception);
+        }
+    }
+
+    private void refillOutbox() throws IOException
+    {
+        if (eventJournal == null || !outbox.isEmpty())
+        {
+            return;
+        }
+        List<QueuedEvent> head = new ArrayList<>();
+        for (EventJournal.Entry entry : eventJournal.readHead(MAX_OUTBOX_SIZE))
+        {
+            SyncEvent event = gson.fromJson(entry.eventJson, SyncEvent.class);
+            if (event == null || !entry.eventId.equals(event.eventId))
+            {
+                throw new IOException("Stored event identity does not match its journal entry");
+            }
+            QueuedEvent queued = new QueuedEvent();
+            queued.event = event;
+            head.add(queued);
+        }
+        outbox.addAll(head);
+    }
+
+    private boolean acknowledgeQueuedEvent(String eventId)
+    {
+        try
+        {
+            if (eventJournal != null)
+            {
+                if (!eventJournal.acknowledge(eventId))
+                {
+                    throw new IOException("Journal head changed before acknowledgement");
+                }
+                journalSize = Math.max(0, journalSize - 1);
+            }
+            outbox.removeFirst();
+            refillOutbox();
+            return true;
+        }
+        catch (IOException | RuntimeException exception)
+        {
+            localStorageFailure(exception);
+            return false;
+        }
+    }
+
+    private boolean hasQueuedEvents()
+    {
+        return !outbox.isEmpty() || journalSize > 0 || !unjournaledEvents.isEmpty() || storageBlocked;
+    }
+
+    private boolean prepareStorageForDelivery()
+    {
+        if (activeStorageContext == null)
+        {
+            return true;
+        }
+        if (!activeStorageContext.accountKey.equals(SyncStorageContext.capture(config, activeAccountHash).accountKey))
+        {
+            return false;
+        }
+        if (storageBlocked && now() < storageRetryAt)
+        {
+            return false;
+        }
+        if (!storageInitialized)
+        {
+            loadCurrentAccount();
+        }
+        else if (storageBlocked || !unjournaledEvents.isEmpty())
+        {
+            if (storageBlocked)
+            {
+                // Re-read the durable head after an I/O failure or a competing
+                // local acknowledgement. Never keep retrying a stale RAM head.
+                outbox.clear();
+            }
+            storageBlocked = false;
+            storeUnjournaledEvents();
+            persistCurrentAccount();
+            try
+            {
+                refillOutbox();
+            }
+            catch (IOException | RuntimeException exception)
+            {
+                localStorageFailure(exception);
+            }
+        }
+        if (!storageBlocked)
+        {
+            storageRetryAt = 0;
+            if (syncHealth.failed(SyncHealthTracker.Channel.STORAGE))
+            {
+                healthSuccess(SyncHealthTracker.Channel.STORAGE);
+            }
+        }
+        return storageInitialized && !storageBlocked && unjournaledEvents.isEmpty();
+    }
+
+    private void localStorageFailure(Exception exception)
+    {
+        if (!storageBlocked || now() >= storageRetryAt)
+        {
+            LOG.error("Lokale synchronisatieopslag niet beschikbaar; verzending gepauzeerd, gegevens blijven bewaard",
+                exception);
+        }
+        storageBlocked = true;
+        storageRetryAt = now() + 15;
+        healthFailure(SyncHealthTracker.Channel.STORAGE, "lokale opslag niet beschikbaar; verzending gepauzeerd");
     }
 
     private void clearStoredPairing(String status)
     {
+        ensureLegacyConnectionBinding();
+        persistCurrentAccount();
         invalidateOverviewContext();
-        pendingCashBalance = null;
-        cashInFlightBalance = null;
-        setStoredValue("deviceToken", "");
-        setStoredValue("deviceId", "");
-        setStoredValue("ownerEmail", "");
-        setStoredValue("linkedAt", "");
+        updatingPairing = true;
+        try
+        {
+            setStoredValue("deviceToken", "");
+            setStoredValue("deviceId", "");
+            setStoredValue("ownerEmail", "");
+            setStoredValue("linkedAt", "");
+        }
+        finally
+        {
+            updatingPairing = false;
+        }
+        switchToCurrentAccount();
         requestInFlight = false;
         heartbeatInFlight = false;
         snapshotInFlight = false;
@@ -2906,7 +3307,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         if (panel != null)
         {
-            panel.updateHealth(syncHealth.banner(outbox.size()));
+            panel.updateHealth(syncHealth.banner((int) Math.min(Integer.MAX_VALUE,
+                Math.max(journalSize, outbox.size()) + unjournaledEvents.size())));
         }
     }
 
@@ -3069,7 +3471,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             requestInFlight || snapshotInFlight || slotStateInFlight || statusInFlight ||
             heartbeatInFlight || cashInFlight ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
-            !outbox.isEmpty() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))
+            hasQueuedEvents() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))
         {
             overviewRefreshPending = true;
             overviewFreshMarketPending |= freshMarket;
@@ -3379,6 +3781,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void setAccountCash(long value)
     {
+        if (started && activeStorageContext != null)
+        {
+            switchToCurrentAccount();
+        }
         if (!started || !hasDeviceToken())
         {
             if (started)
@@ -3387,8 +3793,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             return;
         }
-        pendingCashBalance = Math.max(0, value);
-        if (cashInFlight || workerRequests.isActive() || !outbox.isEmpty() || snapshotPending ||
+        pendingCashUpdate = PendingCashUpdate.create(value);
+        persistCurrentAccount();
+        if (cashInFlight || workerRequests.isActive() || hasQueuedEvents() || snapshotPending ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
             now() < workerBackoffUntil)
         {
@@ -3400,8 +3807,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void sendPendingCashIfPossible()
     {
-        if (!started || pendingCashBalance == null || cashInFlight || !hasDeviceToken() ||
-            workerRequests.isActive() || !outbox.isEmpty() || snapshotPending ||
+        if (!started || pendingCashUpdate == null || cashInFlight || !hasDeviceToken() ||
+            workerRequests.isActive() || hasQueuedEvents() || snapshotPending ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
             now() < workerBackoffUntil)
         {
@@ -3410,14 +3817,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
         HttpUrl endpoint = endpoint(CASH_PATH);
         if (endpoint == null)
         {
-            pendingCashBalance = null;
+            pendingCashUpdate = null;
+            persistCurrentAccount();
             setConnectionStatus("Ongeldig webapp-adres");
             return;
         }
-        long submittedCash = Math.max(0, pendingCashBalance);
+        PendingCashUpdate submittedUpdate = pendingCashUpdate;
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("cash_balance", submittedCash);
-        payload.put("request_id", UUID.randomUUID().toString());
+        payload.put("cash_balance", submittedUpdate.balance);
+        payload.put("request_id", submittedUpdate.requestId);
         Request request = authorizedRequest(endpoint)
             .put(RequestBody.create(JSON, gson.toJson(payload)))
             .header("Content-Type", "application/json; charset=utf-8")
@@ -3428,7 +3836,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
         cashInFlight = true;
-        cashInFlightBalance = submittedCash;
+        cashInFlightUpdate = submittedUpdate;
         setConnectionStatus("Cashstack opslaan...");
         workerCall.enqueue(new Callback()
         {
@@ -3440,7 +3848,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     call,
                     () -> {
                     cashInFlight = false;
-                    cashInFlightBalance = null;
+                    cashInFlightUpdate = null;
                     long retryAt = scheduleTransientRetry(++cashRetryAttempts);
                     registerWorkerBackoff(retryAt);
                     setConnectionStatus("Cashstack blijft in wachtrij; automatisch herstel actief");
@@ -3459,11 +3867,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     call,
                     () -> {
                     cashInFlight = false;
-                    cashInFlightBalance = null;
+                    cashInFlightUpdate = null;
                     if (statusCode >= 200 && statusCode < 300)
                     {
                         cashRetryAttempts = 0;
-                        clearPendingCashIfSame(submittedCash);
+                        clearPendingCashIfSame(submittedUpdate);
                         setConnectionStatus("Cashstack accountbreed opgeslagen");
                         requestOverview(true);
                     }
@@ -3481,7 +3889,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     else
                     {
                         cashRetryAttempts = 0;
-                        clearPendingCashIfSame(submittedCash);
+                        clearPendingCashIfSame(submittedUpdate);
                         setConnectionStatus("Cashstack kreeg HTTP " + statusCode);
                         debug("Cashstackantwoord: {}", abbreviate(body, 300));
                     }
@@ -3490,11 +3898,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         });
     }
 
-    private void clearPendingCashIfSame(long submittedCash)
+    private void clearPendingCashIfSame(PendingCashUpdate submittedUpdate)
     {
-        if (pendingCashBalance != null && pendingCashBalance == submittedCash)
+        if (pendingCashUpdate != null && pendingCashUpdate.hasSameIdentity(submittedUpdate))
         {
-            pendingCashBalance = null;
+            pendingCashUpdate = null;
+            persistCurrentAccount();
         }
     }
 
@@ -4929,6 +5338,18 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         String text = trim(value).replace('\n', ' ').replace('\r', ' ');
         return text.length() <= maxLength ? text : text.substring(0, maxLength) + "…";
+    }
+
+    private static final class AccountState
+    {
+        SlotSnapshot[] slots;
+        long snapshotSequence;
+        PendingSnapshot pendingSnapshot;
+        LastTradePriceBook.Entry[] lastTradePrices;
+        GeItemPresenceBook.Entry[] itemPresence;
+        FlipCyclePlanBook.Cycle[] cycles;
+        PendingCashUpdate pendingCash;
+        SyncEvent[] unjournaled;
     }
 
     private static final class PairResponse

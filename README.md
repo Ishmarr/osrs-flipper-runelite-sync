@@ -1,6 +1,17 @@
-# OSRS Flipper Sync v5.2.29
+# OSRS Flipper Sync v5.2.30
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.30 — P1-auditfixes
+
+- Een cashopdracht behoudt dezelfde `request_id` tijdens retries en na een herstart. Een oud antwoord kan een nieuwere opdracht met hetzelfde bedrag niet wissen.
+- Bij overname van een server-offer-ID blijven lokale koopfills, verkoopreserveringen en cycluslinks consistent. Het vastgelegde koopadvies en de minimumverkoopprijs worden samen overgenomen, ook voor collect en een volgende verkoopsetup.
+- Niet-verzonden GE-events staan in een lokaal journal; alleen de eerstvolgende maximaal 500 events worden in het geheugen geladen. Een volle wachtrij verliest daardoor geen afgeronde trades. Een event verdwijnt pas na het bestaande volledige serverantwoord of een definitieve weigering.
+- Journal, cashopdracht, snapshot en flipplannen zijn gescheiden per webapp-origin, eigenaar, apparaat en RuneScape-account. Een nieuwe koppeling verstuurt geen geschiedenis van de vorige koppeling.
+
+De opslag staat onder de RuneLite-map in `osrs-flipper-sync/outbox`. Bestaande configuratie wordt per RuneLite-profiel eenmalig geïmporteerd voor de koppeling die bij de upgrade actief is; de oude configuratie blijft als bron bewaard. Niet-verzonden gegevens van andere koppelingen blijven apart staan en worden alleen hervat met dezelfde context. Verwijder deze map niet zolang er nog updates wachten. Bij onleesbare of niet-schrijfbare opslag pauzeert verzending met een zichtbare melding; nieuwe events blijven tijdens die sessie in het geheugen totdat schrijven weer lukt.
+
+Cloudflare Free voor twee gebruikers blijft de randvoorwaarde: geen nieuwe clouddiensten, polling of dependencies. Eén Worker-request tegelijk, één GE-event per request, de bestaande kleine snapshotdelen, caches en backoff blijven behouden. Herstel van een langere uitval verstuurt de bewaarde oorspronkelijke events via diezelfde route.
 
 ## 5.2.29
 
@@ -317,6 +328,8 @@ De plugin verstuurt geen RuneScape-wachtwoord, Jagex-inloggegevens, bankinhoud, 
 3. Start de Gradle-taak `run`.
 4. Test koppeling, volledige synchronisatie, netwerkherstel en periodieke reconciliatie.
 
-## Plugin Hub-publicatie
+## Publicatiebeleid
 
-Voor publicatie moet dit project in een publieke GitHub-repository staan. Test eerst de volledige fase-4-checklist in `FASE-4-INSTALLATIE-EN-PUBLICATIE.md`. Dien daarna in de RuneLite Plugin Hub-repository een manifestbestand in met de repository-URL en de volledige commit-hash.
+Publiceer dit project nooit naar de RuneLite Plugin Hub en dien daar geen wijzigingen in. Dit is een expliciet verbod van de eigenaar, vastgelegd in `AGENTS.md`.
+
+De broncode staat in de eigen GitHub-repository. De lokale RuneLite-testclient gebruikt dit Gradle-project; herstart die client om bijgewerkte code te laden. Zie `FASE-4-INSTALLATIE-EN-PUBLICATIE.md` voor de lokale test- en publicatiestappen. Cloudflare blijft op het Free-plan voor twee gebruikers.
