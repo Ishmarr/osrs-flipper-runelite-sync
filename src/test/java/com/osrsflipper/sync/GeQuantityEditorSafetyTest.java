@@ -163,6 +163,118 @@ public class GeQuantityEditorSafetyTest
         }
     }
 
+    @Test
+    public void priceClickUsesNewestLocalWikiPriceWithoutStartingNetworkWork() throws Exception
+    {
+        Harness h = new Harness();
+        h.overview(101, 100, 100);
+        h.prompt.text = "Set a price for each item:";
+        h.invoke("showGePriceEditorSuggestionFromCache");
+        JavaScriptCallback delayed = h.callback();
+        h.market(101, 250, 199);
+        delayed.run(null);
+        assertEquals("200", h.inputValue);
+        // No HTTP client/client-thread dispatcher is injected: a refresh on
+        // this click would fail instead of silently doing extra network work.
+    }
+
+    @Test
+    public void lateWikiResponseCreatesAndRefreshesPriceRuleInAnOpenEditor() throws Exception
+    {
+        Harness h = new Harness();
+        h.prompt.text = "Set a price for each item:";
+        h.invoke("refreshGeEditorSuggestions");
+        assertTrue(h.parent.children.isEmpty());
+        h.wikiResponse(101, 250, 99);
+        WidgetStub suggestion = h.ownSuggestion();
+        assertTrue(suggestion.text.endsWith("100 gp"));
+        h.wikiResponse(101, 250, 199);
+        assertSame(suggestion, h.ownSuggestion());
+        assertTrue(suggestion.text.endsWith("200 gp"));
+        h.callback().run(null);
+        assertEquals("200", h.inputValue);
+    }
+
+    @Test
+    public void missingPriceDisablesRuleAndStaleClickPreservesManualInput() throws Exception
+    {
+        Harness h = new Harness();
+        h.overview(101, 100, 100);
+        h.prompt.text = "Set a price for each item:";
+        h.invoke("showGePriceEditorSuggestionFromCache");
+        JavaScriptCallback delayed = h.callback();
+        set(h.plugin, "overview", RuneliteOverviewView.empty());
+        h.invoke("refreshGeEditorSuggestions");
+        assertTrue(h.ownSuggestion().hidden);
+        assertFalse(h.ownSuggestion().hasListener);
+        assertTrue(h.ownSuggestion().actions.isEmpty());
+        delayed.run(null);
+        assertEquals("123", h.inputValue);
+        h.overview(101, 100, 100);
+        h.invoke("refreshGeEditorSuggestions");
+        assertFalse(h.ownSuggestion().hidden);
+        h.callback().run(null);
+        assertEquals("100", h.inputValue);
+    }
+
+    @Test
+    public void oldPriceClickCannotEditAnotherItemSideSlotOrPrompt() throws Exception
+    {
+        for (String change : new String[] {"item", "side", "slot", "prompt", "hidden"})
+        {
+            Harness h = new Harness();
+            h.overview(101, 100, 100);
+            h.prompt.text = "Set a price for each item:";
+            h.invoke("showGePriceEditorSuggestionFromCache");
+            JavaScriptCallback delayed = h.callback();
+            switch (change)
+            {
+                case "item": h.setupItem.itemId = 202; break;
+                case "side": h.setup.text = "Sell offer"; break;
+                case "slot": h.selectedSlot = 2; break;
+                case "prompt": h.prompt.text = "How many do you wish to buy?"; break;
+                case "hidden": h.setup.hidden = true; break;
+                default: throw new AssertionError(change);
+            }
+            delayed.run(null);
+            assertEquals(change, "123", h.inputValue);
+            assertTrue(change, h.ownSuggestion().hidden);
+        }
+    }
+
+    @Test
+    public void oldPriceCallbacksAfterRestartOrConnectionSwitchAreIgnored() throws Exception
+    {
+        for (String generation : new String[] {"lifecycleGeneration", "overviewContextGeneration"})
+        {
+            Harness h = new Harness();
+            h.overview(101, 100, 100);
+            h.prompt.text = "Set a price for each item:";
+            h.invoke("showGePriceEditorSuggestionFromCache");
+            JavaScriptCallback delayed = h.callback();
+            set(h.plugin, generation, 1L);
+            delayed.run(null);
+            assertEquals(generation, "123", h.inputValue);
+        }
+    }
+
+    @Test
+    public void quantityRuleSurvivesOldPriceCallbackAndPriceCleanup() throws Exception
+    {
+        Harness h = new Harness();
+        h.overview(101, 100, 100);
+        h.prompt.text = "Set a price for each item:";
+        h.invoke("showGePriceEditorSuggestionFromCache");
+        JavaScriptCallback oldPrice = h.callback();
+        h.prompt.text = "How many do you wish to buy?";
+        h.invoke("refreshGeEditorSuggestions");
+        JavaScriptCallback quantity = h.callback();
+        oldPrice.run(null);
+        assertFalse(h.ownSuggestion().hidden);
+        assertSame(quantity, h.callback());
+        assertEquals("123", h.inputValue);
+    }
+
     private static final class Harness
     {
         final OsrsFlipperSyncPlugin plugin = new OsrsFlipperSyncPlugin();
@@ -172,6 +284,7 @@ public class GeQuantityEditorSafetyTest
         final WidgetStub setupItem = new WidgetStub("");
         final WidgetStub input = new WidgetStub("123*");
         String inputValue = "123";
+        int selectedSlot;
 
         Harness() throws Exception
         {
@@ -189,11 +302,14 @@ public class GeQuantityEditorSafetyTest
                     {
                         case "getWidget": return widgets.get((Integer) arguments[0]);
                         case "getVarpValue": return 101;
+                        case "getVarbitValue": return selectedSlot;
                         case "setVarcStrValue": inputValue = (String) arguments[1]; return null;
                         default: return defaultValue(method.getReturnType());
                     }
                 });
             set(plugin, "client", client);
+            set(plugin, "started", true);
+            set(plugin, "gson", new com.google.gson.Gson());
             set(plugin, "focusedGeItemId", 101);
             set(plugin, "focusedGeSide", "buy");
             set(plugin, "focusedGeContext", FocusedGeItemResolver.EditorContext.NEW_SETUP);
@@ -209,6 +325,25 @@ public class GeQuantityEditorSafetyTest
         }
 
         void showQuantity() throws Exception { invoke("showGeQuantityEditorSuggestion"); }
+
+        @SuppressWarnings("unchecked")
+        void market(int itemId, int instantBuy, int instantSell) throws Exception
+        {
+            Field prices = OsrsFlipperSyncPlugin.class.getDeclaredField("marketPrices");
+            prices.setAccessible(true);
+            ((Map<Integer, MarketPriceView>) prices.get(plugin)).put(itemId,
+                new MarketPriceView(itemId, instantBuy, instantSell, 100, 100, 100));
+        }
+
+        void wikiResponse(int itemId, int instantBuy, int instantSell) throws Exception
+        {
+            Method response = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+                "handleMarketPriceResponse", int.class, int.class, String.class);
+            response.setAccessible(true);
+            response.invoke(plugin, itemId, 200, "{\"data\":{\"" + itemId +
+                "\":{\"high\":" + instantBuy + ",\"low\":" + instantSell +
+                ",\"highTime\":100,\"lowTime\":100}}}");
+        }
 
         void invoke(String name) throws Exception
         {

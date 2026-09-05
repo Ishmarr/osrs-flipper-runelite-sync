@@ -3,7 +3,6 @@ plugins {
 }
 
 repositories {
-    mavenLocal()
     maven {
         url = 'https://repo.runelite.net'
         content {
@@ -13,7 +12,7 @@ repositories {
     mavenCentral()
 }
 
-def runeLiteVersion = 'latest.release'
+def runeLiteVersion = '1.12.37'
 def pluginMainClass = 'com.osrsflipper.sync.OsrsFlipperSyncPluginTest'
 
 dependencies {
@@ -24,25 +23,29 @@ dependencies {
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 group = 'com.osrsflipper'
-version = '5.2.30'
+version = '5.2.31'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release.set(11)
 }
 
-// src/test bevat naast JUnit-tests ook de RuneLite-ontwikkelstarter met
-// een main()-methode. Gradle 9+ mag die starter niet als test proberen te draaien.
+// The development main class is not a JUnit test. Keep Gradle's empty-suite
+// failure enabled so broken test discovery cannot silently pass the build.
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
-    failOnNoDiscoveredTests.set(false)
+    exclude 'com/osrsflipper/sync/OsrsFlipperSyncPluginTest.class'
 }
 
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = pluginMainClass
     jvmArgs '-ea'
-    args '--developer-mode', '--debug'
+    args '--developer-mode'
 }
 
 tasks.register('shadowJar', Jar) {

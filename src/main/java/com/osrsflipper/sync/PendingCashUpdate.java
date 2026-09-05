@@ -16,12 +16,13 @@ final class PendingCashUpdate
 
     static PendingCashUpdate create(long balance)
     {
-        return new PendingCashUpdate(UUID.randomUUID().toString(), Math.max(0, balance));
+        if (balance < 0 || balance > Integer.MAX_VALUE) throw new IllegalArgumentException("Cash balance out of range");
+        return new PendingCashUpdate(UUID.randomUUID().toString(), balance);
     }
 
     boolean isValid()
     {
-        return balance >= 0 && requestId != null &&
+        return balance >= 0 && balance <= Integer.MAX_VALUE && requestId != null &&
             requestId.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");
     }
 

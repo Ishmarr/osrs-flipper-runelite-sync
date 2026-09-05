@@ -13,7 +13,7 @@ final class OfferGuidanceResolver
     static Guidance buy(
         int actualOrderPrice,
         int currentSellCandidate,
-        String itemName,
+        int itemId,
         Guidance previous,
         boolean continuingOffer)
     {
@@ -29,7 +29,7 @@ final class OfferGuidanceResolver
         int lowestSellPrice = freezeLowestSellPrice(
             repriced.lowestSellPrice,
             repriced.buyPrice,
-            itemName);
+            itemId);
         return new Guidance(
             repriced.buyPrice,
             repriced.sellPrice,
@@ -37,7 +37,7 @@ final class OfferGuidanceResolver
             lowestSellPrice);
     }
 
-    static int freezeLowestSellPrice(int existingLowestSellPrice, int buyPrice, String itemName)
+    static int freezeLowestSellPrice(int existingLowestSellPrice, int buyPrice, int itemId)
     {
         if (existingLowestSellPrice > 0)
         {
@@ -45,7 +45,7 @@ final class OfferGuidanceResolver
         }
         return SessionStatsTracker.calculateLowestBreakEvenSellPrice(
             buyPrice,
-            itemName);
+            itemId);
     }
 
     static int adoptServerLowestSellPrice(int localLowestSellPrice, int serverLowestSellPrice)
@@ -104,7 +104,6 @@ final class OfferGuidanceResolver
         long startedAt,
         long lastEventAt,
         String offerId,
-        String itemName,
         int buyPrice,
         int sellPrice,
         int lowestSellPrice)
@@ -119,7 +118,7 @@ final class OfferGuidanceResolver
             offerId,
             safeBuyPrice,
             sellPrice,
-            freezeLowestSellPrice(lowestSellPrice, safeBuyPrice, itemName));
+            freezeLowestSellPrice(lowestSellPrice, safeBuyPrice, itemId));
     }
 
     static Guidance reprice(
@@ -193,6 +192,10 @@ final class OfferGuidanceResolver
                 candidate.filledQuantity >= sellQuantity &&
                 candidate.buyPrice > 0 &&
                 candidate.startedAt <= sellStartedAt &&
+                // A legacy snapshot has cumulative fills but no acquisition
+                // history. Do not attribute its later-observed stock to an
+                // earlier sale. Known cycles use their lastAcquiredAt instead.
+                candidate.lastEventAt <= sellStartedAt &&
                 !candidate.offerId.isEmpty() &&
                 !linked.contains(candidate.offerId))
             .max(ranking)

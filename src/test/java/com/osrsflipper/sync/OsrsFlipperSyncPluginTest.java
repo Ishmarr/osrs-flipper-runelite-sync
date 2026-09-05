@@ -7,6 +7,7 @@ public class OsrsFlipperSyncPluginTest
 {
     public static void main(String[] args) throws Exception
     {
+        TokenLogFilter.install();
         ExternalPluginManager.loadBuiltin(OsrsFlipperSyncPlugin.class);
         RuneLite.main(args);
     }

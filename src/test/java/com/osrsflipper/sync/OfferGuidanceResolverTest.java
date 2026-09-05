@@ -13,6 +13,30 @@ import static org.junit.Assert.assertTrue;
 public class OfferGuidanceResolverTest
 {
     @Test
+    public void aLegacyBuyCannotSupplyASaleBeforeItsCumulativeFillWasObserved()
+    {
+        OfferGuidanceResolver.BuyCandidate laterFill = buy(
+            1, 3004, 40, 100, 200, "later-fill", 1_000, 1_100);
+        assertNull(OfferGuidanceResolver.selectBuyForSell(
+            2, 3004, 40, 150, Collections.singletonList(laterFill), Collections.emptySet()));
+        assertEquals(laterFill, OfferGuidanceResolver.selectBuyForSell(
+            2, 3004, 40, 200, Collections.singletonList(laterFill), Collections.emptySet()));
+    }
+
+    @Test
+    public void exemptItemGuidanceCapturesTheActualUntaxedBreakEvenPrice()
+    {
+        OfferGuidanceResolver.Guidance buy = OfferGuidanceResolver.buy(
+            1_000, 1_100, 2347, null, false);
+        assertEquals(1_000, buy.lowestSellPrice);
+        OfferGuidanceResolver.BuyCandidate legacy = OfferGuidanceResolver.frozenBuyCandidate(
+            1, 2347, 40, 100, 110, "hammer-buy", 1_000, 1_100, 0);
+        assertEquals(1_000, legacy.lowestSellPrice);
+        assertEquals(1_000,
+            OfferGuidanceResolver.linkedSell(1_100, 1_100, 0, legacy).lowestSellPrice);
+    }
+
+    @Test
     public void crossSlotSellSelectsTheNewestExactUnboundBuy()
     {
         OfferGuidanceResolver.BuyCandidate oldSameSlot = buy(
@@ -93,13 +117,13 @@ public class OfferGuidanceResolverTest
     {
         int frozenFloor = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
             9_398,
-            "Antidote++(4)");
+            5952);
         assertEquals(9_589, frozenFloor);
 
         OfferGuidanceResolver.Guidance repriced = OfferGuidanceResolver.buy(
             9_277,
             9_488,
-            "Antidote++(4)",
+            5952,
             new OfferGuidanceResolver.Guidance(9_398, 9_681, "", frozenFloor),
             true);
 
@@ -202,7 +226,7 @@ public class OfferGuidanceResolverTest
         OfferGuidanceResolver.Guidance next = OfferGuidanceResolver.buy(
             9_277,
             9_488,
-            "Antidote++(4)",
+            5952,
             new OfferGuidanceResolver.Guidance(9_398, 9_681, "", 9_589),
             false);
 
@@ -258,11 +282,11 @@ public class OfferGuidanceResolverTest
         int backfilled = OfferGuidanceResolver.freezeLowestSellPrice(
             0,
             9_398,
-            "Antidote++(4)");
+            5952);
         int unchanged = OfferGuidanceResolver.freezeLowestSellPrice(
             backfilled,
             9_277,
-            "Antidote++(4)");
+            5952);
 
         assertEquals(9_589, backfilled);
         assertEquals(9_589, unchanged);
@@ -309,7 +333,6 @@ public class OfferGuidanceResolverTest
             100,
             200,
             "legacy-buy",
-            "Antidote++(4)",
             9_398,
             9_681,
             0);

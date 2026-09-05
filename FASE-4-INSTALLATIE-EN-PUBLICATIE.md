@@ -10,7 +10,8 @@
 - de verbindingsstatus blijft zichtbaar;
 - uitgebreide logging blijft optioneel;
 - **Apparaat koppelen** en **Opnieuw synchroniseren** staan als echte knoppen in een eigen RuneLite-zijpaneel;
-- bestaande v4-apparaattokens blijven behouden doordat configgroep en geheime tokensleutel ongewijzigd zijn;
+- tokens staan buiten de RuneLite-config, met lokale bestandstoegang en binding aan profiel, HTTPS-origin, eigenaar en apparaat;
+- een oude token zonder betrouwbare origin-binding wordt verwijderd uit de configuratie; koppel in dat geval eenmaal opnieuw;
 - de handmatige synchronisatiestatus eindigt na bevestiging op **Synchronisatie voltooid**;
 - het RuneLite-icoon is hetzelfde als het app-icoon;
 - geserialiseerde aanvragen en exponentiële back-off voorkomen een retry-storm bij Cloudflare 503/1102;
@@ -22,13 +23,13 @@ Gebruik de Worker-versie die bij de huidige RuneLite-release hoort en voer alle 
 
 ## Testvolgorde
 
-### 1. Upgrade vanaf v4
+### 1. Upgrade vanaf een oudere versie
 
-1. Sluit de v4-testclient.
-2. Open het v5-project in IntelliJ.
+1. Laat de huidige client zijn wachtende synchronisatie afronden en sluit hem.
+2. Open dit project in IntelliJ met een JDK van Java 17 of hoger voor Gradle 9.6.0.
 3. Start de Gradle-taak `run`.
-4. Controleer dat de status automatisch je bestaande gekoppelde account toont.
-5. Koppel alleen opnieuw wanneer de status aangeeft dat de token ongeldig of ingetrokken is.
+4. Bij een oude koppeling zonder origin-binding vraagt de status om eenmaal opnieuw te koppelen.
+5. Gebruik **Apparaat koppelen** en een nieuwe code uit je eigen webapp. Daarna blijft de nieuwe lokale koppeling bij herstarts behouden. Journals van vorige apparaten worden niet onder een nieuwe apparaatidentiteit verstuurd.
 
 ### 2. Nieuwe apparaatkoppeling
 
@@ -75,6 +76,6 @@ Schakel **Uitgebreide logging** alleen tijdelijk in wanneer een test faalt. Cont
 2. Gebruik de bijgewerkte versie van dit project.
 3. Start de Gradle-taak `run`, of gebruik de bestaande lokale testclient-launcher die naar deze projectmap verwijst.
 4. Controleer de pluginversie in de opstartlog en de verbindingsstatus in het zijpaneel.
-5. Koppel alleen opnieuw wanneer de bestaande koppeling ongeldig of ingetrokken is.
+5. Koppel opnieuw wanneer de status dit vraagt: bij de eenmalige tokenmigratie, een ongeldig/ingetrokken apparaat of een ander webapp-adres.
 
 Een push naar de eigen GitHub-repository wijzigt geen reeds geopende RuneLite-client. Nieuwe code wordt bij een herstart geladen. Publicatie via de RuneLite Plugin Hub is verboden.

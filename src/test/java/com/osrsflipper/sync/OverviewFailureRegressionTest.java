@@ -14,6 +14,7 @@ import java.util.Deque;
 import javax.imageio.ImageIO;
 import javax.swing.JLabel;
 import javax.swing.SwingUtilities;
+import okhttp3.HttpUrl;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -145,8 +146,12 @@ public class OverviewFailureRegressionTest
         set(plugin, "overviewInFlight", false);
         set(plugin, "config", new OsrsFlipperSyncConfig()
         {
-            @Override public String deviceToken() { return "rlt_" + "test".repeat(12); }
+            @Override public String ownerEmail() { return "owner@example.test"; }
+            @Override public String deviceId() { return "fixture-device"; }
         });
+        set(plugin, "pairingCredentials", PairingCredentials.create("default",
+            HttpUrl.parse(new OsrsFlipperSyncConfig() {}.webappAddress()),
+            "owner@example.test", "fixture-device", "rlt_" + "test".repeat(12)));
         health(plugin).fail(SyncHealthTracker.Channel.OVERVIEW, "time-out", System.currentTimeMillis() / 1000);
         long retry = health(plugin).retryAt(SyncHealthTracker.Channel.OVERVIEW);
         Method request = OsrsFlipperSyncPlugin.class.getDeclaredMethod(

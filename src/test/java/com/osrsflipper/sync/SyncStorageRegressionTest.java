@@ -296,7 +296,8 @@ public class SyncStorageRegressionTest
             harness.enableEventDelivery();
             invoke(harness.plugin, "flushOutboxIfPossible");
             TestCall old = harness.eventCalls().get(0);
-            harness.manager.setConfiguration(OsrsFlipperSyncConfig.GROUP, "deviceToken", TOKEN_B);
+            set(harness.plugin, "pairingCredentials", PairingCredentials.create("0",
+                okhttp3.HttpUrl.parse("https://storage.example.test"), "alice@example.test", "device-a", TOKEN_B));
             old.respond(200, complete("token-rotation"));
             harness.drain();
             assertEquals(1, harness.journal().size());
@@ -341,6 +342,37 @@ public class SyncStorageRegressionTest
     }
 
     @Test
+    public void damagedDerivedCachesCannotBlockOrDiscardDurableCommands() throws Exception
+    {
+        Path root = temporary.newFolder().toPath();
+        String cashId;
+        try (Harness first = new Harness(root, defaults(), 42))
+        {
+            first.enqueue(event("cache-independent", 1));
+            PendingCashUpdate cash = PendingCashUpdate.create(555);
+            cashId = cash.requestId;
+            set(first.plugin, "pendingCashUpdate", cash);
+            invoke(first.plugin, "persistCurrentAccount");
+            JsonObject state = GSON.fromJson(first.journal().readState(), JsonObject.class);
+            state.addProperty("lastTradePrices", "broken cache");
+            state.add("itemPresence", GSON.fromJson("[{\"itemId\":\"invalid-number\"}]", com.google.gson.JsonArray.class));
+            first.journal().writeState(state.toString());
+        }
+        try (Harness restored = new Harness(root, defaults(), 42))
+        {
+            assertFalse((Boolean) get(restored.plugin, "storageBlocked"));
+            assertEquals(cashId, ((PendingCashUpdate) get(restored.plugin, "pendingCashUpdate")).requestId);
+            assertEquals("cache-independent", restored.journal().readHead(1).get(0).eventId);
+            restored.enableEventDelivery();
+            invoke(restored.plugin, "flushOutboxIfPossible");
+            restored.eventCalls().get(0).respond(200, complete("cache-independent"));
+            restored.drain();
+            assertTrue(restored.journal().isEmpty());
+            assertEquals(cashId, ((PendingCashUpdate) get(restored.plugin, "pendingCashUpdate")).requestId);
+        }
+    }
+
+    @Test
     public void failedAcknowledgementRetainsTheHeadUntilStorageRecovers() throws Exception
     {
         Path root = temporary.newFolder().toPath();
@@ -350,7 +382,8 @@ public class SyncStorageRegressionTest
             Path eventFile;
             try (java.util.stream.Stream<Path> files = Files.walk(root))
             {
-                eventFile = files.filter(file -> file.toString().endsWith(".json")).findFirst().orElseThrow();
+                eventFile = files.filter(file -> file.getFileName().toString().matches("[0-9]{20}_[a-f0-9]{64}\\.json"))
+                    .findFirst().orElseThrow();
             }
             String original = Files.readString(eventFile);
             Files.writeString(eventFile, "{corrupt");
@@ -486,6 +519,10 @@ public class SyncStorageRegressionTest
             set(plugin, "client", client);
             set(plugin, "gson", GSON);
             set(plugin, "eventJournalRoot", root);
+            set(plugin, "pairingCredentials", PairingCredentials.create(Long.toUnsignedString(profileId),
+                okhttp3.HttpUrl.parse(configuration.get("webappAddress")), configuration.get("ownerEmail"),
+                configuration.get("deviceId"), configuration.get("deviceToken")));
+            set(plugin, "credentialProfileKey", Long.toUnsignedString(profileId));
             set(plugin, "clientThread", new ClientThread()
             {
                 @Override public void invokeLater(Runnable action) { callbacks.addLast(action); }
@@ -519,7 +556,7 @@ public class SyncStorageRegressionTest
         void pair(String owner, String device, String token) throws Exception
         {
             invoke(plugin, "handlePairResponse", new Class<?>[]{int.class, String.class}, 200,
-                "{\"device_token\":\"" + token + "\",\"device_id\":\"" + device +
+                "{\"success\":true,\"device_token\":\"" + token + "\",\"device_id\":\"" + device +
                     "\",\"owner_email\":\"" + owner + "\",\"linked_at\":1234}");
         }
 

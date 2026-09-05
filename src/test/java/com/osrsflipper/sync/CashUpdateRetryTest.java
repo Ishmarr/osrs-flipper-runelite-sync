@@ -24,6 +24,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
@@ -31,6 +32,9 @@ import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 import okio.Buffer;
+import okio.BufferedSource;
+import okio.Okio;
+import okio.Source;
 import okio.Timeout;
 import org.junit.Test;
 
@@ -145,6 +149,67 @@ public class CashUpdateRetryTest
             PendingCashUpdate.class).isValid());
     }
 
+    @Test
+    public void invalidSuccessfulCashRepliesKeepTheSameIntentAndDoNotRefreshOverview() throws Exception
+    {
+        for (String body : new String[] {"", "<html>Worker error</html>", "{\"success\":true}",
+            "{\"success\":false}", "{\"success\":true,\"cash\":{\"available\":1000}}"})
+        {
+            try (Harness harness = new Harness())
+            {
+                harness.submit(1_000);
+                PendingCashUpdate original = harness.pending();
+                TestCall first = harness.cashCall(0);
+                first.respond(body);
+                harness.drainCallbacks();
+                assertSame(body, original, harness.pending());
+                assertFalse((Boolean) field(harness.plugin, "cashInFlight"));
+                assertFalse((Boolean) field(harness.plugin, "overviewInFlight"));
+                assertEquals(1, harness.calls.size());
+                assertTrue((Long) field(harness.plugin, "workerBackoffUntil") > 0);
+                harness.retryNow();
+                TestCall retry = harness.cashCall(1);
+                assertEquals(first.requestId(), retry.requestId());
+                retry.succeed();
+                harness.drainCallbacks();
+                assertNull(harness.pending());
+            }
+        }
+    }
+
+    @Test
+    public void responseBodyReadFailureKeepsTheOriginalCashIntentForRetry() throws Exception
+    {
+        try (Harness harness = new Harness())
+        {
+            harness.submit(1_000);
+            PendingCashUpdate original = harness.pending();
+            TestCall first = harness.cashCall(0);
+            first.respond(new ResponseBody()
+            {
+                private final BufferedSource source = Okio.buffer(new Source()
+                {
+                    @Override public long read(Buffer sink, long count) throws IOException
+                    {
+                        throw new IOException("fixture interrupted body");
+                    }
+                    @Override public Timeout timeout() { return Timeout.NONE; }
+                    @Override public void close() {}
+                });
+                @Override public MediaType contentType() { return MediaType.parse("application/json"); }
+                @Override public long contentLength() { return -1; }
+                @Override public BufferedSource source() { return source; }
+            });
+            harness.drainCallbacks();
+            assertSame(original, harness.pending());
+            assertEquals(1, harness.calls.size());
+            assertFalse((Boolean) field(harness.plugin, "cashInFlight"));
+            assertTrue((Long) field(harness.plugin, "workerBackoffUntil") > 0);
+            harness.retryNow();
+            assertEquals(first.requestId(), harness.cashCall(1).requestId());
+        }
+    }
+
     private static final class IdempotentCashServer
     {
         private final Set<String> appliedIds = new HashSet<>();
@@ -183,9 +248,13 @@ public class CashUpdateRetryTest
             set(plugin, "gson", gson);
             set(plugin, "config", new OsrsFlipperSyncConfig()
             {
-                @Override public String deviceToken() { return "rlt_" + "fixture".repeat(8); }
                 @Override public String webappAddress() { return "https://cash-fixture.example.test"; }
+                @Override public String ownerEmail() { return "owner@example.test"; }
+                @Override public String deviceId() { return "fixture-device"; }
             });
+            set(plugin, "pairingCredentials", PairingCredentials.create("default",
+                HttpUrl.parse("https://cash-fixture.example.test"), "owner@example.test", "fixture-device",
+                "rlt_" + "fixture".repeat(8)));
             set(plugin, "clientThread", new ClientThread()
             {
                 @Override public void invokeLater(Runnable action) { callbacks.addLast(action); }
@@ -273,9 +342,18 @@ public class CashUpdateRetryTest
         void fail() { callback.onFailure(this, new IOException("fixture lost reply")); }
         void succeed() throws IOException
         {
+            respond("{\"success\":true,\"cash\":{\"available\":1000,\"reserved\":0," +
+                "\"available_plus_reserved\":1000,\"updated_at\":123}}");
+        }
+        void respond(String body) throws IOException
+        {
+            respond(ResponseBody.create(MediaType.parse("application/json"), body));
+        }
+        void respond(ResponseBody body) throws IOException
+        {
             callback.onResponse(this, new Response.Builder().request(request)
                 .protocol(Protocol.HTTP_1_1).code(200).message("OK")
-                .body(ResponseBody.create(MediaType.parse("application/json"), "{\"success\":true}"))
+                .body(body)
                 .build());
         }
         @Override public Request request() { return request; }

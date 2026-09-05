@@ -352,7 +352,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             new EmptyBorder(5, 7, 5, 7)));
         cashInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
         cashInput.setPreferredSize(new Dimension(180, 38));
-        cashInput.setToolTipText("Vrije cash in GP; dit saldo wordt accountbreed bijgehouden");
+        cashInput.setToolTipText("Gehele GP, bijvoorbeeld 1000000 of 1 000 000; maximaal 2 147 483 647");
         cash.add(cashInput);
         JButton saveCash = primaryActionButton("Cashstack opslaan");
         saveCash.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -422,27 +422,31 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             return;
         }
-        String digits = cashInput.getText() == null
-            ? ""
-            : cashInput.getText().replaceAll("[^0-9]", "");
-        if (digits.isEmpty())
-        {
-            cashInput.setToolTipText("Vul een geldig cashsaldo in GP in");
-            return;
-        }
         try
         {
-            long value = Long.parseLong(digits);
-            if (value > Integer.MAX_VALUE)
-            {
-                throw new NumberFormatException("te groot");
-            }
-            saveCashAction.accept(value);
+            saveCashAction.accept(parseCashBalance(cashInput.getText()));
+            cashInput.setToolTipText("Gehele GP, bijvoorbeeld 1000000 of 1 000 000; maximaal 2 147 483 647");
         }
         catch (NumberFormatException ignored)
         {
-            cashInput.setToolTipText("Cashsaldo moet tussen 0 en 2.147.483.647 GP liggen");
+            cashInput.setToolTipText("Ongeldige invoer: gebruik gehele GP van 0 t/m 2 147 483 647, met alleen optionele duizendtals-spaties");
         }
+    }
+
+    static long parseCashBalance(String input)
+    {
+        String normalized = input == null ? "" : input
+            .replace('\u00a0', ' ').replace('\u202f', ' ').trim();
+        if (!normalized.matches("(?:[0-9]+|[0-9]{1,3}(?: [0-9]{3})+)"))
+        {
+            throw new NumberFormatException("Expected whole GP with optional grouped spaces");
+        }
+        long value = Long.parseLong(normalized.replace(" ", ""));
+        if (value > Integer.MAX_VALUE)
+        {
+            throw new NumberFormatException("Cash balance exceeds the GP limit");
+        }
+        return value;
     }
 
     private void rebuildSlots()
@@ -592,7 +596,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             {
                 lowestPrice = SessionStatsTracker.calculateLowestBreakEvenSellPrice(
                     displayedBuyPrice,
-                    opportunity.itemName);
+                    opportunity.itemId);
             }
             card.add(coloredMetric("Lowest price", priceOrDash(lowestPrice), GOLD, selling));
         }
@@ -601,7 +605,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             long profitPerItem = SessionStatsTracker.calculateProfitPerItem(
                 displayedBuyPrice,
                 displayedSellPrice,
-                opportunity.itemName);
+                opportunity.itemId);
             card.add(coloredMetric(
                 "Winst/item",
                 formatSignedGp(profitPerItem),
@@ -653,7 +657,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         return SessionStatsTracker.calculateProfitPerItem(
             displayedBuyPrice,
             displayedSellPrice,
-            opportunity.itemName) * Math.max(0L, opportunity.effectiveMaximumQuantity());
+            opportunity.itemId) * Math.max(0L, opportunity.effectiveMaximumQuantity());
     }
 
     static String buyLimitUsage(RuneliteOverviewView.Opportunity opportunity)

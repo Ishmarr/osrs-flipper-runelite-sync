@@ -1,5 +1,6 @@
 package com.osrsflipper.sync;
 
+import com.google.gson.Gson;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -58,10 +59,14 @@ public class OverviewRefreshContractTest
     @Test
     public void outboxBatchRefreshesBuyLimitsOnlyForAppliedOrDuplicateBuyEvents()
     {
-        assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "applied"));
-        assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "duplicate"));
-        assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", "rejected"));
-        assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("sell", "applied"));
+        for (String eventType : new String[] {"new_buy_offer", "price_change", "partial_buy",
+            "buy_completed", "cancellation", "slot_emptied", "reconcile", "", null})
+        {
+            assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", eventType, "applied"));
+            assertTrue(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", eventType, "duplicate"));
+            assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("buy", eventType, "rejected"));
+            assertFalse(OsrsFlipperSyncPlugin.syncResultChangesBuyLimit("sell", eventType, "applied"));
+        }
 
         assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.NONE,
             OsrsFlipperSyncPlugin.outboxOverviewRefresh(false, true));
@@ -69,6 +74,48 @@ public class OverviewRefreshContractTest
             OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, true));
         assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.NORMAL,
             OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, false));
+    }
+
+    @Test
+    public void repeatedGuidanceAcknowledgementsKeepBuyLimitCacheDespiteCumulativeFills() throws Exception
+    {
+        assertFalse(successfulBuyEvent("guidance_updated", "applied", "event-1"));
+        assertFalse(successfulBuyEvent("guidance_updated", "duplicate", "event-1"));
+        boolean dirty = false;
+        for (int index = 0; index < 10; index++)
+        {
+            dirty |= successfulBuyEvent("guidance_updated", "applied", "event-1");
+        }
+        assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.NORMAL,
+            OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, dirty));
+
+        dirty |= successfulBuyEvent("partial_buy", "duplicate", "event-1");
+        dirty |= successfulBuyEvent("guidance_updated", "applied", "event-1");
+        assertEquals(OsrsFlipperSyncPlugin.OutboxOverviewRefresh.FRESH_BUY_LIMITS,
+            OsrsFlipperSyncPlugin.outboxOverviewRefresh(true, dirty));
+    }
+
+    @Test
+    public void unrelatedAcknowledgementCannotInvalidateBuyLimitCache() throws Exception
+    {
+        assertFalse(successfulBuyEvent("partial_buy", "applied", "different-event"));
+    }
+
+    private static boolean successfulBuyEvent(String eventType, String outcome, String responseEventId)
+        throws Exception
+    {
+        Gson gson = new Gson();
+        Class<?> eventClass = Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$SyncEvent");
+        Class<?> responseClass = Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$SyncResponse");
+        Object event = gson.fromJson("{\"eventId\":\"event-1\",\"side\":\"buy\",\"filledQuantity\":100," +
+            "\"eventType\":\"" + eventType + "\"}", eventClass);
+        Object response = gson.fromJson("{\"success\":true,\"summary\":{\"received\":1,\"applied\":1}," +
+            "\"results\":[{\"event_id\":\"" + responseEventId + "\",\"outcome\":\"" + outcome +
+            "\",\"classification\":\"partial_buy\"}]}", responseClass);
+        Method successful = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+            "successfulBuyLimitEvent", eventClass, responseClass);
+        successful.setAccessible(true);
+        return (boolean) successful.invoke(null, event, response);
     }
 
     @Test

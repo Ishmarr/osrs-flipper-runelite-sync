@@ -121,7 +121,7 @@ public class FlipPriceResolverTest
         int sell = FlipPriceResolver.displayedSellPrice(kwarm, priceTest);
         assertEquals(2_200, buy);
         assertEquals(2_251, sell);
-        assertEquals(6L, SessionStatsTracker.calculateProfitPerItem(buy, sell, "Kwarm"));
+        assertEquals(6L, SessionStatsTracker.calculateProfitPerItem(buy, sell, kwarm.itemId));
         assertEquals(58_374L, OsrsFlipperSyncPanel.displayedCycleProfit(kwarm, buy, sell));
     }
 

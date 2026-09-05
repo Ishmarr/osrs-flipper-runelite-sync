@@ -26,7 +26,7 @@ public class BuyLimitPresentationTest
         long profitPerItem = SessionStatsTracker.calculateProfitPerItem(
             opportunity.buyPrice,
             opportunity.sellPrice,
-            opportunity.itemName);
+            opportunity.itemId);
 
         assertEquals(30, opportunity.effectiveMaximumQuantity());
         assertEquals(profitPerItem * 30,

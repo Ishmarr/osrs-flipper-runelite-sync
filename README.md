@@ -1,6 +1,18 @@
-# OSRS Flipper Sync v5.2.30
+# OSRS Flipper Sync v5.2.31
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.31 — P2-auditfixes
+
+Alle twaalf Medium-punten uit de audit zijn verwerkt. Zie [het P2-overzicht](AUDIT-P2.md) voor de wijzigingen, tests en betrokken bestanden.
+
+- Prijsadvies wordt bij klikken opnieuw uit lokale data berekend; cashinvoer accepteert alleen gehele GP (`1000000` of `1 000 000`, maximaal `2147483647`).
+- Ongeldige HTTP 2xx-antwoorden bevestigen geen cashopdracht, statuscontrole of heartbeat. Bestaande wachtrijen en back-off blijven behouden.
+- Beschadigde prijscaches blokkeren intacte opdrachten niet. Verkoopkoppelingen respecteren verwervingstijd en beschikbare voorraad; GE-belastingvrijstellingen gebruiken item-ID's.
+- Shutdown, herstart en late Wiki-antwoorden zijn afgeschermd per lifecycle en accountcontext.
+- Tokens staan in lokale bestanden met uitsluitend toegang voor de bestandseigenaar, gebonden aan RuneLite-profiel, HTTPS-origin, eigenaar en apparaat. Nieuwe tokens komen niet in RuneLite's configuratiesynchronisatie of DEBUG-logs.
+- **Een bestaande koppeling zonder vastgelegde origin moet eenmaal opnieuw worden gekoppeld.** De oude token wordt niet automatisch aan het huidige adres gekoppeld. Bestaande GE-journals blijven in hun oorspronkelijke account-/apparaatcontext bewaard.
+- Guidance-only wijzigingen gebruiken de gewone overzichtscache. Cloudflare blijft Free voor twee gebruikers; er zijn geen extra periodieke API-verzoeken toegevoegd.
 
 ## 5.2.30 — P1-auditfixes
 
@@ -324,9 +336,13 @@ De plugin verstuurt geen RuneScape-wachtwoord, Jagex-inloggegevens, bankinhoud, 
 ## Ontwikkeltest
 
 1. Open deze map als Gradle-project in IntelliJ IDEA.
-2. Gebruik Java 11.
+2. Gebruik een JDK van Java 17 of hoger voor Gradle 9.6.0. Java 11 is uitsluitend het bytecode-doelniveau van de plugin.
 3. Start de Gradle-taak `run`.
 4. Test koppeling, volledige synchronisatie, netwerkherstel en periodieke reconciliatie.
+
+Op Windows start `start-runelite-testclient.cmd` vanuit zijn eigen checkout en gebruikt je bestaande `JAVA_HOME` of `PATH`. Als beide ontbreken, zoekt de starter een JDK van Java 17 of hoger in `%USERPROFILE%\.jdks`, zonder je systeeminstellingen te wijzigen. Met `start-runelite-testclient.cmd -CheckJava` controleer je de gevonden Java-runtime zonder RuneLite te starten. De normale start schakelt RuneLite DEBUG-logging niet in. De optie **Uitgebreide logging** in de plugin blijft beschikbaar voor diagnose.
+
+RuneLite is vastgezet op `1.12.37`; `gradle.lockfile` legt de transitive dependencyversies vast en `mavenLocal()` wordt niet gebruikt. De wrapper controleert de officiële SHA-256 van Gradle 9.6.0. Een gewone controle is `gradlew.bat build`; na een bewuste dependency-update vernieuw je de locks met `gradlew.bat build --write-locks` en bekijk je het verschil. De ontwikkelstarter is uitgesloten van JUnit, terwijl een lege testsuite de build laat falen.
 
 ## Publicatiebeleid
 

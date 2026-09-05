@@ -30,6 +30,13 @@ public class WikiMarketPriceRequestTest
     public void periodicRefreshQueuesTheFocusedItemWithoutAnOfferSlot() throws Exception
     {
         OsrsFlipperSyncPlugin plugin = new OsrsFlipperSyncPlugin();
+        Field started = OsrsFlipperSyncPlugin.class.getDeclaredField("started");
+        started.setAccessible(true);
+        started.setBoolean(plugin, true);
+        // Keep transport occupied while exercising the periodic queue producer.
+        Field inFlight = OsrsFlipperSyncPlugin.class.getDeclaredField("marketPriceInFlight");
+        inFlight.setAccessible(true);
+        inFlight.setBoolean(plugin, true);
         Field focusedItem = OsrsFlipperSyncPlugin.class.getDeclaredField("focusedGeItemId");
         focusedItem.setAccessible(true);
         focusedItem.setInt(plugin, 12_780);
