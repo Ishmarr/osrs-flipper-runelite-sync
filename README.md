@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.28
+# OSRS Flipper Sync v5.2.29
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.29
+
+- RuneLite verstuurt nog maar één Worker-request tegelijk; wachtende GE-events en herstelsnapshots krijgen voorrang op overviews, cashstack- en statuscontroles.
+- Een meerdelige herstelsnapshot behoudt exact dezelfde snapshot-ID en gaat na één seconde verder zonder foutmelding, zowel bij HTTP 202 als bij het tijdelijke compatibiliteitsantwoord HTTP 503.
+- Nieuwe GE-mutaties wachten tot een lopende snapshot veilig is afgerond. Netwerk- en serverfouten behouden de duurzame GE- en cashwachtrijen en een oud callbackantwoord kan een actieve retry niet meer wissen.
+- Een tijdelijke uitval van de publieke Wiki-marktbron wist de laatste goede flipkaarten niet; persoonlijke statistieken en cashstack blijven bruikbaar.
 
 ## 5.2.28
 

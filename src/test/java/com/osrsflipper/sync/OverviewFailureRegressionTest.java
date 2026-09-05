@@ -87,6 +87,57 @@ public class OverviewFailureRegressionTest
     }
 
     @Test
+    public void degradedMarketResponseUpdatesPersonalDataButKeepsLastGoodOpportunities() throws Exception
+    {
+        RuneliteOverviewView.Opportunity retained = new RuneliteOverviewView.Opportunity(
+            385, "Anglerfish", "cycle_profit", 1811, 1877, 1878, 1810,
+            100, 2900, 100, 2900, 2900, 100);
+        RuneliteOverviewView previous = new RuneliteOverviewView(
+            java.util.Collections.emptyList(),
+            java.util.Collections.singletonList(retained),
+            retained,
+            new RuneliteOverviewView.PeriodStats(123, 1, 2, 3, 4, 5),
+            RuneliteOverviewView.PeriodStats.empty(),
+            RuneliteOverviewView.PeriodStats.empty(),
+            java.util.Collections.emptyList(),
+            new RuneliteOverviewView.CashBalance(777, 0, 777, 1),
+            1);
+        String degraded = completePayload().replace(
+            "\"price_tests\":[]",
+            "\"price_tests\":[],\"availability\":{" +
+                "\"personal_data\":true,\"market_data\":false," +
+                "\"opportunities\":false,\"degraded\":true," +
+                "\"error_code\":\"market_deadline_exceeded\"}");
+        Class<?> type = nested("OverviewResponse");
+        Object response = new Gson().fromJson(degraded, type);
+        Method available = type.getDeclaredMethod("opportunitiesAvailable");
+        available.setAccessible(true);
+        assertFalse((Boolean) available.invoke(response));
+        Method toView = type.getDeclaredMethod("toView", RuneliteOverviewView.class);
+        toView.setAccessible(true);
+        RuneliteOverviewView current = (RuneliteOverviewView) toView.invoke(response, previous);
+        assertNotSame(previous, current);
+        assertSame(retained, current.opportunityForItem(385));
+        assertEquals(0, current.today.realizedProfit);
+        assertEquals(1000, current.cash.available);
+    }
+
+    @Test
+    public void accountTransitionDiscardsPendingAndInFlightCashValues() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = plugin();
+        set(plugin, "pendingCashBalance", 1234L);
+        set(plugin, "cashInFlightBalance", 1200L);
+        set(plugin, "cashInFlight", true);
+        Method clear = OsrsFlipperSyncPlugin.class.getDeclaredMethod("clearAccountScopedCashQueue");
+        clear.setAccessible(true);
+        clear.invoke(plugin);
+        assertNull(get(plugin, "pendingCashBalance"));
+        assertNull(get(plugin, "cashInFlightBalance"));
+        assertFalse((Boolean) get(plugin, "cashInFlight"));
+    }
+
+    @Test
     public void manualFocusRefreshCannotBypassBackoffOrStartAnotherRequest() throws Exception
     {
         OsrsFlipperSyncPlugin plugin = plugin();

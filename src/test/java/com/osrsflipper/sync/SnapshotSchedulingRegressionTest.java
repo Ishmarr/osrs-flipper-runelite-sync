@@ -1,6 +1,7 @@
 package com.osrsflipper.sync;
 
 import com.google.gson.Gson;
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -16,6 +17,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class SnapshotSchedulingRegressionTest
@@ -75,6 +77,108 @@ public class SnapshotSchedulingRegressionTest
         assertFalse(booleanField(plugin, "snapshotDirty"));
         assertTrue(booleanField(plugin, "serverStateCheckPending"));
         assertEquals("changed_during_conflicted_snapshot", field(plugin, "snapshotReason"));
+    }
+
+    @Test
+    public void temporaryHttpFailureRetainsTheSameDirtySnapshotIntent() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWaitingForSnapshot("snapshot-retry-http");
+        Object pending = field(plugin, "pendingSnapshot");
+        set(plugin, "snapshotDirty", true);
+
+        handleSnapshot(plugin, "snapshot-retry-http", 503, "{}");
+
+        assertSame(pending, field(plugin, "pendingSnapshot"));
+        assertTrue(booleanField(plugin, "snapshotPending"));
+        assertTrue(booleanField(plugin, "snapshotDirty"));
+        assertEquals(1, intField(pending, "attempts"));
+    }
+
+    @Test
+    public void networkFailureRetainsTheSameDirtySnapshotIntent() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWaitingForSnapshot("snapshot-retry-network");
+        Object pending = field(plugin, "pendingSnapshot");
+        set(plugin, "snapshotDirty", true);
+        Method handle = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+            "handleSnapshotFailure",
+            String.class,
+            IOException.class);
+        handle.setAccessible(true);
+
+        handle.invoke(plugin, "snapshot-retry-network", new IOException("fixture timeout"));
+
+        assertSame(pending, field(plugin, "pendingSnapshot"));
+        assertTrue(booleanField(plugin, "snapshotPending"));
+        assertTrue(booleanField(plugin, "snapshotDirty"));
+        assertEquals(1, intField(pending, "attempts"));
+    }
+
+    @Test
+    public void slotChangeDuringSnapshotBackoffCannotAbandonTheDurableIntent() throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWaitingForSnapshot("snapshot-backoff");
+        Object pending = field(plugin, "pendingSnapshot");
+        set(pending, "attempts", 1);
+        set(plugin, "snapshotInFlight", false);
+        Object event = newNested("SyncEvent");
+        set(event, "eventId", "newer-slot-event");
+
+        Method enqueue = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+            "enqueue",
+            event.getClass());
+        enqueue.setAccessible(true);
+        enqueue.invoke(plugin, event);
+
+        assertSame(pending, field(plugin, "pendingSnapshot"));
+        assertTrue(booleanField(plugin, "snapshotPending"));
+        assertTrue(booleanField(plugin, "snapshotDirty"));
+        assertEquals(1, outbox(plugin).size());
+    }
+
+    @Test
+    public void boundedWorkerSnapshotContinuationIsProgressNotAHealthFailure() throws Exception
+    {
+        for (int status : new int[]{202, 503})
+        {
+            String snapshotId = "snapshot-continuation-" + status;
+            OsrsFlipperSyncPlugin plugin = pluginWaitingForSnapshot(snapshotId);
+            Object pending = field(plugin, "pendingSnapshot");
+
+            handleSnapshot(
+                plugin,
+                snapshotId,
+                status,
+                "{\"success\":false,\"code\":\"snapshot_processing\"," +
+                    "\"reconcile_required\":false}");
+
+            assertSame(pending, field(plugin, "pendingSnapshot"));
+            assertTrue(booleanField(plugin, "snapshotPending"));
+            assertFalse(booleanField(plugin, "snapshotInFlight"));
+            assertEquals(0, intField(pending, "attempts"));
+            assertTrue(longField(pending, "nextAttemptAt") > 0L);
+            assertEquals(0L, longField(plugin, "workerBackoffUntil"));
+            assertEquals("", ((SyncHealthTracker) field(plugin, "syncHealth")).banner(0));
+        }
+    }
+
+    @Test
+    public void newSnapshotTriggerDuringBackoffQueuesAFollowUpWithoutReplacingTheIntent()
+        throws Exception
+    {
+        OsrsFlipperSyncPlugin plugin = pluginWaitingForSnapshot("snapshot-trigger-backoff");
+        Object pending = field(plugin, "pendingSnapshot");
+        set(plugin, "snapshotInFlight", false);
+
+        Method queue = OsrsFlipperSyncPlugin.class.getDeclaredMethod(
+            "queueFullSnapshot",
+            String.class);
+        queue.setAccessible(true);
+        queue.invoke(plugin, "manual_sync");
+
+        assertSame(pending, field(plugin, "pendingSnapshot"));
+        assertTrue(booleanField(plugin, "snapshotPending"));
+        assertTrue(booleanField(plugin, "snapshotDirty"));
     }
 
     @Test
@@ -159,7 +263,8 @@ public class SnapshotSchedulingRegressionTest
         assertTrue(compact.contains(
             "\"periodic_hourly\", SnapshotSyncPolicy.ReconcileMode.ALWAYS"));
         assertTrue(compact.contains(
-            "requestInFlight || loginReconciliationPending || !outbox.isEmpty()"));
+            "requestInFlight || loginReconciliationPending || " +
+                "(!outbox.isEmpty() && !continuingDurableSnapshot)"));
         assertTrue(compact.contains(
             "anyWorkerRequestInFlight() || loginReconciliationPending || !outbox.isEmpty()"));
     }
@@ -314,6 +419,11 @@ public class SnapshotSchedulingRegressionTest
     private static int intField(Object target, String name) throws Exception
     {
         return (Integer) field(target, name);
+    }
+
+    private static long longField(Object target, String name) throws Exception
+    {
+        return (Long) field(target, name);
     }
 
     private static Object field(Object target, String name) throws Exception
