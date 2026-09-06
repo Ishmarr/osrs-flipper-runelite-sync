@@ -237,11 +237,8 @@ public class SnapshotSchedulingRegressionTest
             "\"periodic_reconcile\", SnapshotSyncPolicy.ReconcileMode.NEVER"));
         assertTrue(compact.contains(
             "\"periodic_hourly\", SnapshotSyncPolicy.ReconcileMode.ALWAYS"));
-        assertTrue(compact.contains(
-            "requestInFlight || loginReconciliationPending || " +
-                "(hasQueuedEvents() && !continuingDurableSnapshot)"));
-        assertTrue(compact.contains(
-            "anyWorkerRequestInFlight() || loginReconciliationPending || hasQueuedEvents()"));
+        // Login ordering is exercised through real queued callbacks and live
+        // offer fixtures in OverviewListContinuityTest, including durable recovery.
     }
 
     private static OsrsFlipperSyncPlugin pluginWaitingForSnapshot(String snapshotId) throws Exception

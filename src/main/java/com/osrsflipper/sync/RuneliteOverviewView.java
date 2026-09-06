@@ -107,6 +107,12 @@ final class RuneliteOverviewView
             priceTests, cash, generatedAt, topOpportunitiesLoaded, false, true);
     }
 
+    RuneliteOverviewView withCash(CashBalance nextCash)
+    {
+        return new RuneliteOverviewView(expected, hourly, focus, today, month, total,
+            priceTests, cash.accept(nextCash), generatedAt, topOpportunitiesLoaded, marketAvailable, marketStale);
+    }
+
     Opportunity opportunityForItem(int itemId)
     {
         if (focus != null && focus.itemId == itemId)
@@ -182,6 +188,8 @@ final class RuneliteOverviewView
         final int officialBuyLimit;
         final int usedBuyLimit;
         final int remainingBuyLimit;
+        final QuantityCapacity quantityCapacity;
+        final String quantityReason;
         private final boolean buyLimitAvailable;
         private final boolean quantityAvailable;
 
@@ -271,9 +279,25 @@ final class RuneliteOverviewView
             int usedBuyLimit,
             int remainingBuyLimit)
         {
+            this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy, instantSell,
+                expectedQuantity, expectedProfit, maximumQuantity, maximumProfitPerHour,
+                maximumCycleProfit, priceUpdatedAt, lowestSellPrice, officialBuyLimit,
+                usedBuyLimit, remainingBuyLimit, null, "");
+        }
+
+        Opportunity(
+            int itemId, String itemName, String ranking, int buyPrice, int sellPrice,
+            int instantBuy, int instantSell, int expectedQuantity, long expectedProfit,
+            int maximumQuantity, long maximumProfitPerHour, long maximumCycleProfit,
+            long priceUpdatedAt, int lowestSellPrice, int officialBuyLimit,
+            int usedBuyLimit, int remainingBuyLimit, QuantityCapacity quantityCapacity,
+            String quantityReason)
+        {
             this.itemId = Math.max(0, itemId);
             this.itemName = itemName == null ? "" : itemName;
             this.ranking = ranking == null ? "" : ranking;
+            this.quantityCapacity = quantityCapacity;
+            this.quantityReason = quantityReason == null ? "" : quantityReason;
             this.buyPrice = Math.max(0, buyPrice);
             this.sellPrice = Math.max(0, sellPrice);
             this.instantBuy = Math.max(0, instantBuy);
@@ -409,13 +433,34 @@ final class RuneliteOverviewView
         final long reserved;
         final long total;
         final long updatedAt;
+        final long version;
+        final long snapshotAtMs;
 
         CashBalance(long available, long reserved, long total, long updatedAt)
         {
-            this.available = Math.max(0, available);
-            this.reserved = Math.max(0, reserved);
-            this.total = Math.max(this.available + this.reserved, Math.max(0, total));
-            this.updatedAt = Math.max(0, updatedAt);
+            this(available, reserved, total, updatedAt, -1, 0);
+        }
+
+        CashBalance(long available, long reserved, long total, long updatedAt, long version, long snapshotAtMs)
+        {
+            this.available = available;
+            this.reserved = reserved;
+            this.total = total;
+            this.updatedAt = updatedAt;
+            this.version = version;
+            this.snapshotAtMs = snapshotAtMs;
+        }
+
+        CashBalance accept(CashBalance incoming)
+        {
+            if (incoming == null || incoming.version < version) return this;
+            if (incoming.version == version)
+            {
+                if (snapshotAtMs > 0 && incoming.snapshotAtMs > 0 && incoming.snapshotAtMs < snapshotAtMs)
+                    return this;
+                if (incoming.updatedAt < updatedAt) return this;
+            }
+            return incoming;
         }
 
         static CashBalance empty()

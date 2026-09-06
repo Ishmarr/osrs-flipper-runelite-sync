@@ -3,6 +3,7 @@ package com.osrsflipper.sync;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import com.google.gson.JsonObject;
 
 /** Worker overview contract: validation and conversion without client or network state. */
 final class WorkerOverviewResponse
@@ -14,7 +15,7 @@ final class WorkerOverviewResponse
     private OpportunityLists opportunities;
     private OverviewStats stats;
     private List<PriceTestData> price_tests;
-    private CashData cash;
+    private JsonObject cash;
     private OverviewAvailability availability;
     private MarketRefresh market_refresh;
 
@@ -27,7 +28,7 @@ final class WorkerOverviewResponse
             stats != null && stats.today != null &&
             stats.month != null && stats.total != null && stats.today.isComplete() &&
             stats.month.isComplete() && stats.total.isComplete() && cash != null &&
-            cash.isComplete() && price_tests != null;
+            WorkerResponseValidation.cashBalance(cash) != null && price_tests != null;
     }
 
     private static boolean validOpportunityRows(List<OpportunityData> rows)
@@ -112,9 +113,7 @@ final class WorkerOverviewResponse
             periodView(stats == null ? null : stats.month),
             periodView(stats == null ? null : stats.total),
             priceTestViews(price_tests),
-            cash == null
-                ? RuneliteOverviewView.CashBalance.empty()
-                : cash.toView(),
+            prior.cash.accept(WorkerResponseValidation.cashBalance(cash)),
             replaceTop ? (market_generated_at > 0 ? market_generated_at : generated_at) : prior.generatedAt,
             replaceTop || prior.topOpportunitiesLoaded,
             focused ? prior.marketAvailable : available,
@@ -221,6 +220,7 @@ final class WorkerOverviewResponse
         long maximum_profit_per_hour;
         long maximum_cycle_profit;
         long price_updated_at;
+        QuantityCapacityData quantity_capacity;
 
         RuneliteOverviewView.Opportunity toView()
         {
@@ -238,9 +238,27 @@ final class WorkerOverviewResponse
                 maximum_profit_per_hour,
                 maximum_cycle_profit,
                 price_updated_at,
+                0,
                 official_buy_limit,
                 used_buy_limit,
-                remaining_buy_limit);
+                remaining_buy_limit,
+                quantity_capacity == null ? null : quantity_capacity.toView(),
+                "");
+        }
+    }
+
+    private static final class QuantityCapacityData
+    {
+        Long cash_available;
+        Double buy_volume_per_hour;
+        Double sell_volume_per_hour;
+        Long guide_price;
+
+        QuantityCapacity toView()
+        {
+            return cash_available == null || buy_volume_per_hour == null ||
+                sell_volume_per_hour == null || guide_price == null
+                ? null : new QuantityCapacity(cash_available, buy_volume_per_hour, sell_volume_per_hour, guide_price);
         }
     }
 
@@ -316,25 +334,4 @@ final class WorkerOverviewResponse
         }
     }
 
-    private static final class CashData
-    {
-        Long available;
-        Long reserved;
-        Long available_plus_reserved;
-        Long updated_at;
-
-        boolean isComplete()
-        {
-            return available != null && reserved != null && available_plus_reserved != null && updated_at != null;
-        }
-
-        RuneliteOverviewView.CashBalance toView()
-        {
-            return new RuneliteOverviewView.CashBalance(
-                available,
-                reserved,
-                available_plus_reserved,
-                updated_at);
-        }
-    }
 }

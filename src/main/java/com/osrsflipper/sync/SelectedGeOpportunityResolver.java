@@ -44,6 +44,16 @@ final class SelectedGeOpportunityResolver
         FlipperOfferView exactActiveOffer,
         FlipperOfferView openCycle)
     {
+        return resolve(context, itemId, itemName, side, scannerOpportunity, market,
+            priceTest, exactActiveOffer, openCycle, null);
+    }
+
+    static Resolution resolve(
+        FocusedGeItemResolver.EditorContext context, int itemId, String itemName, String side,
+        RuneliteOverviewView.Opportunity scannerOpportunity, MarketPriceView market,
+        LastTradePriceView priceTest, FlipperOfferView exactActiveOffer,
+        FlipperOfferView openCycle, Long currentCash)
+    {
         if (itemId <= 0 || (!"buy".equals(side) && !"sell".equals(side)))
         {
             return Resolution.empty();
@@ -147,6 +157,35 @@ final class SelectedGeOpportunityResolver
             resolvedItemName = scannerOpportunity.itemName;
         }
 
+        boolean samePrices = scannerOpportunity != null &&
+            scannerOpportunity.buyPrice == buyPrice && scannerOpportunity.sellPrice == sellPrice;
+        QuantityCapacity capacity = scannerOpportunity == null ? null : scannerOpportunity.quantityCapacity;
+        int quantity = scannerOpportunity != null && samePrices && scannerOpportunity.hasQuantity()
+            ? scannerOpportunity.effectiveMaximumQuantity() : -1;
+        String quantityReason = quantity < 0 ? "Aantal wacht op actuele capaciteit" : "";
+        long cycleProfit = samePrices ? scannerOpportunity.maximumCycleProfit : 0;
+        long hourlyProfit = samePrices ? scannerOpportunity.maximumProfitPerHour : 0;
+        if (capacity != null)
+        {
+            QuantityCapacity.Estimate estimate = capacity.atPrices(itemId, buyPrice, sellPrice,
+                scannerOpportunity.hasBuyLimit() ? scannerOpportunity.remainingBuyLimit : -1, currentCash);
+            quantity = estimate.quantity;
+            cycleProfit = estimate.cycleProfit;
+            hourlyProfit = estimate.profitPerHour;
+            quantityReason = estimate.reason;
+        }
+        else if (quantity >= 0 && currentCash != null && buyPrice > 0)
+        {
+            quantity = (int) Math.min(quantity, Math.max(0, currentCash) / buyPrice);
+            cycleProfit = Math.max(0, GeTax.calculateProfitPerItem(buyPrice, sellPrice, itemId)) * quantity;
+            if (quantity == 0 && currentCash < buyPrice) quantityReason = "Onvoldoende beschikbare cash";
+        }
+        if (quantity == 0 && quantityReason.isEmpty())
+        {
+            quantityReason = scannerOpportunity != null && scannerOpportunity.hasBuyLimit() &&
+                scannerOpportunity.remainingBuyLimit == 0 ? "Buy limit volledig gebruikt" : "Geen uitvoerbaar aantal";
+        }
+
         RuneliteOverviewView.Opportunity resolved = new RuneliteOverviewView.Opportunity(
             itemId,
             resolvedItemName,
@@ -155,12 +194,11 @@ final class SelectedGeOpportunityResolver
             sellPrice,
             instantBuy,
             instantSell,
-            scannerOpportunity == null ? 0 : scannerOpportunity.expectedQuantity,
-            scannerOpportunity == null ? 0 : scannerOpportunity.expectedProfit,
-            scannerOpportunity == null || !scannerOpportunity.hasQuantity()
-                ? -1 : scannerOpportunity.maximumQuantity,
-            scannerOpportunity == null ? 0 : scannerOpportunity.maximumProfitPerHour,
-            scannerOpportunity == null ? 0 : scannerOpportunity.maximumCycleProfit,
+            samePrices && capacity == null ? scannerOpportunity.expectedQuantity : 0,
+            samePrices && capacity == null ? scannerOpportunity.expectedProfit : 0,
+            quantity,
+            hourlyProfit,
+            cycleProfit,
             priceUpdatedAt,
             0,
             scannerOpportunity != null && scannerOpportunity.hasBuyLimit()
@@ -171,7 +209,9 @@ final class SelectedGeOpportunityResolver
                 : -1,
             scannerOpportunity != null && scannerOpportunity.hasBuyLimit()
                 ? scannerOpportunity.remainingBuyLimit
-                : -1);
+                : -1,
+            capacity,
+            quantityReason);
         return new Resolution(resolved);
     }
 

@@ -10,15 +10,34 @@ final class WorkerResponseValidation
 {
     static boolean cash(String body)
     {
+        return cashBalance(body) != null;
+    }
+
+    static RuneliteOverviewView.CashBalance cashBalance(String body)
+    {
+        try { return cashBalance(successful(body).getAsJsonObject("cash")); }
+        catch (RuntimeException exception) { return null; }
+    }
+
+    static RuneliteOverviewView.CashBalance cashBalance(JsonObject cash)
+    {
         try
         {
-            JsonObject cash = successful(body).getAsJsonObject("cash");
             long available = integer(cash, "available");
             long reserved = integer(cash, "reserved");
-            return reserved >= 0 && integer(cash, "updated_at") >= 0 &&
-                Math.addExact(available, reserved) == integer(cash, "available_plus_reserved");
+            long updatedAt = integer(cash, "updated_at");
+            long total = integer(cash, "available_plus_reserved");
+            long version = cash.has("version") ? integer(cash, "version") : -1;
+            long snapshotAtMs = cash.has("snapshot_at_ms") ? integer(cash, "snapshot_at_ms") : 0;
+            if (reserved < 0 || updatedAt < 0 || snapshotAtMs < 0 ||
+                (cash.has("version") && version < 0) || Math.addExact(available, reserved) != total)
+                return null;
+            // Reconciliation may legitimately report negative free cash. Keep
+            // that signed balance instead of silently displaying an invented zero.
+            return new RuneliteOverviewView.CashBalance(available, reserved, total,
+                updatedAt, version, snapshotAtMs);
         }
-        catch (RuntimeException exception) { return false; }
+        catch (RuntimeException exception) { return null; }
     }
 
     static boolean status(String body, String deviceId, String ownerEmail)

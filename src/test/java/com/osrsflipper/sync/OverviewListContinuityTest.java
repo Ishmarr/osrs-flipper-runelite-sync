@@ -15,6 +15,8 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,6 +31,9 @@ import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.GrandExchangeOffer;
+import net.runelite.api.GrandExchangeOfferState;
+import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
@@ -61,6 +66,453 @@ public class OverviewListContinuityTest
     private static final List<Integer> TOP_IDS = Arrays.asList(1001, 1002, 1003, 1004, 1005);
 
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
+
+    @Test
+    public void focusedRingCallbackRepricesOldZeroAndSharesTheSafeQuantityWithPanelAndEditor() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW, false, true, 100_000_000));
+            h.drain();
+            h.focus(6737);
+            JsonObject response = GSON.fromJson(payload(new ArrayList<>(), 6737, NOW, false, true, 100_000_000), JsonObject.class);
+            JsonObject row = response.getAsJsonObject("opportunities").getAsJsonObject("focus");
+            row.addProperty("item_name", "Berserker ring");
+            row.addProperty("buy_price", 3_900_000);
+            row.addProperty("sell_price", 3_913_491);
+            row.addProperty("instant_buy", 3_913_492);
+            row.addProperty("instant_sell", 3_899_999);
+            row.addProperty("maximum_quantity", 0);
+            row.addProperty("maximum_cycle_profit", 0);
+            row.addProperty("official_buy_limit", 8);
+            row.addProperty("used_buy_limit", 0);
+            row.addProperty("remaining_buy_limit", 8);
+            row.add("quantity_capacity", GSON.fromJson("{\"cash_available\":0,\"buy_volume_per_hour\":34," +
+                "\"sell_volume_per_hour\":35,\"guide_price\":3942506}", JsonObject.class));
+            h.requestFocus(6737).respond(GSON.toJson(response));
+            h.drain();
+            int requestCount = h.calls.size();
+            invoke(h.plugin, "handleMarketPriceResponse", new Class<?>[]{int.class, int.class, String.class},
+                6737, 200, "{\"data\":{\"6737\":{\"high\":3913492,\"low\":3804267," +
+                    "\"highTime\":" + NOW + ",\"lowTime\":" + NOW + "}}}");
+            assertEquals(8, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 6737));
+            String text = h.renderedPanelText();
+            assertTrue(text, text.contains("Berserker ring"));
+            assertTrue(text, text.contains("247 632 GP"));
+            assertFalse(text, text.contains("Geen uitvoerbaar aantal"));
+            assertEquals("Repricing reuses already fetched resources", requestCount, h.calls.size());
+            RuneliteOverviewView current = h.view();
+            set(h.plugin, "overview", current.withCash(new RuneliteOverviewView.CashBalance(3_804_267, 0, 3_804_267, NOW)));
+            assertEquals(0, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 6737));
+            invoke(h.plugin, "refreshSidePanel");
+            assertTrue(h.renderedPanelText().contains("Onvoldoende beschikbare cash"));
+            assertEquals(requestCount, h.calls.size());
+        }
+    }
+
+    @Test
+    public void cashAcknowledgementUpdatesPanelBeforeOverviewAndOlderSnapshotsCannotUndoIt() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.requestFull(true).respond(versionedCashPayload(900, 4, NOW * 1000));
+            h.drain();
+            invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 1000L);
+            TestCall cash = h.calls.get(h.calls.size() - 1);
+            assertTrue(cash.request.url().encodedPath().endsWith("/cash"));
+            cash.respond("{\"success\":true,\"cash\":{\"available\":1000,\"reserved\":200," +
+                "\"available_plus_reserved\":1200,\"version\":5,\"updated_at\":" + NOW +
+                ",\"snapshot_at_ms\":" + (NOW * 1000 + 20) + "}}");
+            h.drain();
+            assertEquals(1000, h.view().cash.available);
+            assertEquals(5, h.view().cash.version);
+            SwingUtilities.invokeAndWait(() -> {
+                try { assertEquals("1 000 GP", ((JLabel) get(h.panel, "cashAvailable")).getText()); }
+                catch (Exception error) { throw new AssertionError(error); }
+            });
+            TestCall refresh = h.calls.get(h.calls.size() - 1);
+            assertTrue(refresh.request.url().encodedPath().endsWith("/overview"));
+            refresh.respond(versionedCashPayload(900, 4, NOW * 1000 + 100));
+            h.drain();
+            assertEquals(1000, h.view().cash.available);
+
+            h.focus(FOCUS);
+            h.requestFocus(FOCUS).respond(versionedCashPayload(800, 4, NOW * 1000 + 200));
+            h.drain();
+            assertEquals("A focused reply also cannot revert committed cash", 1000, h.view().cash.available);
+            h.closeFocus();
+            h.requestFull(true).respond(versionedCashPayload(700, 5, NOW * 1000));
+            h.drain();
+            assertEquals("An earlier read of the same version is stale", 1000, h.view().cash.available);
+            h.requestFull(true).respond(versionedCashPayload(1200, 6, NOW * 1000 + 300));
+            h.drain();
+            assertEquals(1200, h.view().cash.available);
+            assertEquals("One PUT and four full plus one focused overview", 6, h.calls.size());
+        }
+    }
+
+    @Test
+    public void legacyCashWorksUntilVersionedCashArrivesAndAccountSwitchResetsTheVersion() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW, false, true, 500));
+            h.drain();
+            assertEquals(500, h.view().cash.available);
+            h.requestFull(true).respond(versionedCashPayload(1000, 100, NOW * 1000));
+            h.drain();
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW, false, true, 600));
+            h.drain();
+            assertEquals("Unversioned cached data cannot erase a confirmed version", 1000, h.view().cash.available);
+            h.accountHash = 84;
+            invoke(h.plugin, "switchToCurrentAccount");
+            h.disableUnrelatedScheduling();
+            h.requestFull(true).respond(versionedCashPayload(200, 1, NOW * 1000));
+            h.drain();
+            assertEquals(200, h.view().cash.available);
+            assertEquals(1, h.view().cash.version);
+        }
+    }
+
+    @Test
+    public void invalidOverviewCashCannotReplaceTheLastGoodBalanceOrPanel() throws Exception
+    {
+        for (String invalidCash : new String[] {
+            "{\"available\":100,\"reserved\":-1,\"available_plus_reserved\":99,\"updated_at\":1}",
+            "{\"available\":100,\"reserved\":1,\"available_plus_reserved\":102,\"updated_at\":1}",
+            "{\"available\":9007199254740992,\"reserved\":0,\"available_plus_reserved\":9007199254740992,\"updated_at\":1}",
+            "{\"available\":\"100\",\"reserved\":0,\"available_plus_reserved\":100,\"updated_at\":1}",
+            "{\"available\":100,\"reserved\":0,\"available_plus_reserved\":100,\"updated_at\":1,\"version\":-1}"
+        })
+        {
+            try (Harness h = harness())
+            {
+                h.attachPanel();
+                h.requestFull(true).respond(versionedCashPayload(1000, 5, NOW * 1000));
+                h.drain();
+                JsonObject broken = GSON.fromJson(versionedCashPayload(100, 6, NOW * 1000), JsonObject.class);
+                broken.add("cash", GSON.fromJson(invalidCash, JsonObject.class));
+                h.requestFull(true).respond(GSON.toJson(broken));
+                h.drain();
+                assertEquals(1000, h.view().cash.available);
+                assertEquals(5, h.view().cash.version);
+                assertTrue(h.health().failed(SyncHealthTracker.Channel.OVERVIEW));
+                assertEquals("Malformed personal data must not create a retry storm", 2, h.calls.size());
+            }
+        }
+    }
+
+    @Test
+    public void signedReconciliationBalanceRemainsVisibleInsteadOfBecomingZero() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.requestFull(true).respond(versionedCashPayload(-100, 5, NOW * 1000));
+            h.drain();
+            assertEquals(-100, h.view().cash.available);
+            assertEquals(-100, h.view().cash.total);
+            SwingUtilities.invokeAndWait(() -> {
+                try { assertEquals("-100 GP", ((JLabel) get(h.panel, "cashAvailable")).getText()); }
+                catch (Exception error) { throw new AssertionError(error); }
+            });
+        }
+    }
+
+    @Test
+    public void yesterdayListingSoldTodayKeepsItsStartButSendsTodaysRealizationAndRefreshesStats() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.enableGameTicks();
+            long dayStart = LocalDate.now(ZoneId.systemDefault()).atStartOfDay(ZoneId.systemDefault()).toEpochSecond();
+            long yesterday = dayStart - 3600;
+            Class<?> snapshotType = Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$SlotSnapshot");
+            Object previous = GSON.fromJson("{\"slotNumber\":1,\"itemId\":4151,\"itemName\":\"Whip\"," +
+                "\"side\":\"sell\",\"price\":1200,\"totalQuantity\":10,\"filledQuantity\":0," +
+                "\"status\":\"active\",\"offerId\":\"overnight-sell\",\"startedAt\":" + yesterday +
+                ",\"lastEventAt\":" + yesterday + ",\"eventSequence\":1}", snapshotType);
+            ((Map<Integer, Object>) get(h.plugin, "slotSnapshots")).put(1, previous);
+            GrandExchangeOffer offer = (GrandExchangeOffer) Proxy.newProxyInstance(
+                GrandExchangeOffer.class.getClassLoader(), new Class<?>[]{GrandExchangeOffer.class},
+                (proxy, method, arguments) -> {
+                    switch (method.getName())
+                    {
+                        case "getState": return GrandExchangeOfferState.SOLD;
+                        case "getItemId": return 4151;
+                        case "getPrice": return 1200;
+                        case "getTotalQuantity": case "getQuantitySold": return 10;
+                        case "getSpent": return 12000;
+                        default: return primitiveDefault(method.getReturnType());
+                    }
+                });
+            GrandExchangeOfferChanged changed = new GrandExchangeOfferChanged();
+            changed.setSlot(0);
+            changed.setOffer(offer);
+            h.plugin.onGrandExchangeOfferChanged(changed);
+            TestCall sell = h.calls.get(h.calls.size() - 1);
+            Buffer buffer = new Buffer();
+            sell.request.body().writeTo(buffer);
+            JsonObject event = GSON.fromJson(buffer.readUtf8(), JsonObject.class).getAsJsonObject("event");
+            assertEquals("sell_completed", event.get("event_type").getAsString());
+            assertEquals(yesterday, event.get("started_at").getAsLong());
+            assertTrue(event.get("ended_at").getAsLong() >= dayStart);
+            assertTrue(event.get("event_at").getAsLong() >= dayStart);
+            String eventId = event.get("event_id").getAsString();
+            sell.respond("{\"success\":true,\"summary\":{\"received\":1,\"applied\":1,\"duplicate\":0,\"rejected\":0}," +
+                "\"results\":[{\"event_id\":\"" + eventId + "\",\"outcome\":\"applied\",\"classification\":\"sell_completed\"}]}");
+            h.drain();
+            TestCall refresh = h.overviewCalls().get(0);
+            assertEquals(dayStart, Long.parseLong(refresh.request.url().queryParameter("day_start")));
+            JsonObject response = GSON.fromJson(versionedCashPayload(12000, 2, NOW * 1000), JsonObject.class);
+            JsonObject today = response.getAsJsonObject("stats").getAsJsonObject("today");
+            today.addProperty("realized_profit", 1760);
+            today.addProperty("completed_flips", 1);
+            refresh.respond(GSON.toJson(response));
+            h.drain();
+            SwingUtilities.invokeAndWait(() -> {
+                try { assertEquals("+1 760 GP", ((JLabel) get(h.panel, "statsProfit")).getText()); }
+                catch (Exception error) { throw new AssertionError(error); }
+            });
+            today.addProperty("attribution_complete", false);
+            today.addProperty("attribution_error", "Verkoopmoment ontbreekt voor oudere verkopen");
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            assertFalse(h.view().today.attributionComplete);
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    assertEquals("—", ((JLabel) get(h.panel, "statsProfit")).getText());
+                    assertTrue(componentText((Container) get(h.panel, "statsItemsList")).contains("Verkoopmoment ontbreekt"));
+                }
+                catch (Exception error) { throw new AssertionError(error); }
+            });
+        }
+    }
+
+    private static String versionedCashPayload(long cash, long version, long snapshotAtMs)
+    {
+        JsonObject response = GSON.fromJson(payload(TOP_IDS, 0, NOW, false, true, cash), JsonObject.class);
+        response.getAsJsonObject("cash").addProperty("version", version);
+        response.getAsJsonObject("cash").addProperty("snapshot_at_ms", snapshotAtMs);
+        return GSON.toJson(response);
+    }
+
+    @Test
+    public void logoutEmptyEventsCannotCloseAnOfferOrGiveItsCumulativeFillANewIdentity() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            Class<?> snapshotType = Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$SlotSnapshot");
+            Object previous = GSON.fromJson("{\"slotNumber\":1,\"itemId\":4151,\"itemName\":\"Whip\"," +
+                "\"side\":\"sell\",\"price\":1200,\"totalQuantity\":10,\"filledQuantity\":4,\"spentAmount\":4800," +
+                "\"status\":\"partially_filled\",\"offerId\":\"survives-logout\",\"startedAt\":" + (NOW - 86400) +
+                ",\"lastEventAt\":" + (NOW - 100) + ",\"eventSequence\":2}", snapshotType);
+            ((Map<Integer, Object>) get(h.plugin, "slotSnapshots")).put(1, previous);
+            h.gameState = GameState.LOGIN_SCREEN;
+            GameStateChanged logout = new GameStateChanged();
+            logout.setGameState(GameState.LOGIN_SCREEN);
+            h.plugin.onGameStateChanged(logout);
+            GrandExchangeOfferChanged changed = new GrandExchangeOfferChanged();
+            changed.setSlot(0);
+            changed.setOffer((GrandExchangeOffer) Proxy.newProxyInstance(
+                GrandExchangeOffer.class.getClassLoader(), new Class<?>[]{GrandExchangeOffer.class},
+                (proxy, method, arguments) -> "getState".equals(method.getName())
+                    ? GrandExchangeOfferState.EMPTY : primitiveDefault(method.getReturnType())));
+            h.plugin.onGrandExchangeOfferChanged(changed);
+            Object current = ((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1);
+            assertEquals("partially_filled", get(current, "status"));
+            assertEquals("survives-logout", get(current, "offerId"));
+            assertTrue("Logout must not invent a cash/refund event", h.calls.isEmpty());
+
+            h.gameState = GameState.LOGGED_IN;
+            set(h.plugin, "loginReconciliationPending", false);
+            changed.setOffer((GrandExchangeOffer) Proxy.newProxyInstance(
+                GrandExchangeOffer.class.getClassLoader(), new Class<?>[]{GrandExchangeOffer.class},
+                (proxy, method, arguments) -> {
+                    switch (method.getName())
+                    {
+                        case "getState": return GrandExchangeOfferState.SELLING;
+                        case "getItemId": return 4151;
+                        case "getPrice": return 1200;
+                        case "getTotalQuantity": return 10;
+                        case "getQuantitySold": return 6;
+                        case "getSpent": return 7200;
+                        default: return primitiveDefault(method.getReturnType());
+                    }
+                }));
+            h.plugin.onGrandExchangeOfferChanged(changed);
+            TestCall fill = h.calls.get(h.calls.size() - 1);
+            Buffer buffer = new Buffer();
+            fill.request.body().writeTo(buffer);
+            JsonObject event = GSON.fromJson(buffer.readUtf8(), JsonObject.class).getAsJsonObject("event");
+            assertEquals("survives-logout", event.get("runelite_offer_id").getAsString());
+            assertEquals(NOW - 86400, event.get("started_at").getAsLong());
+            assertEquals(7200, event.get("spent_amount").getAsInt());
+            assertEquals(3, event.get("event_sequence").getAsLong());
+            assertEquals(1, h.calls.size());
+        }
+    }
+
+    @Test
+    public void restartWithoutLocalSlotsLoadsIdentityBeforeSendingUnchangedOrAdvancedCumulativeFills() throws Exception
+    {
+        for (int filled : new int[]{4, 6})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                for (int slot = 0; slot < 8; slot++) h.liveOffers[slot] = liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY);
+                h.liveOffers[0] = liveOffer(4151, 1200, 10, filled, GrandExchangeOfferState.SELLING);
+                ((Map<Integer, MarketPriceView>) get(h.plugin, "marketPrices")).put(4151,
+                    new MarketPriceView(4151, 1200, 1100, NOW, NOW, NOW));
+                set(h.plugin, "loginReconciliationPending", true);
+                set(h.plugin, "serverStateCheckPending", true);
+                set(h.plugin, "snapshotPending", true);
+                set(h.plugin, "loggedInTicks", 8);
+                invoke(h.plugin, "checkServerSlotStateIfPossible");
+                assertEquals("Bootstrap starts with one read, no new offer mutation", 1, h.calls.size());
+                TestCall state = h.calls.get(0);
+                assertEquals("GET", state.request.method());
+                assertTrue(state.request.url().encodedPath().endsWith("/ge-slots/state"));
+                invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
+                PendingCashUpdate cash = (PendingCashUpdate) get(h.plugin, "pendingCashUpdate");
+                state.respond(loginServerState("server-offer", 4, 1200, "partially_filled"));
+                h.drain();
+                Object recovered = ((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1);
+                assertEquals("server-offer", get(recovered, "offerId"));
+                assertEquals(NOW - 86400, get(recovered, "startedAt"));
+                assertEquals(4, get(recovered, "filledQuantity"));
+                h.ticks(1);
+                List<TestCall> events = h.calls.stream().filter(call -> call.request.url().encodedPath().endsWith("/ge-slots/sync"))
+                    .collect(Collectors.toList());
+                assertEquals(filled == 4 ? 0 : 1, events.size());
+                assertEquals(cash.requestId, ((PendingCashUpdate) get(h.plugin, "pendingCashUpdate")).requestId);
+                if (!events.isEmpty())
+                {
+                    Buffer buffer = new Buffer();
+                    events.get(0).request.body().writeTo(buffer);
+                    JsonObject event = GSON.fromJson(buffer.readUtf8(), JsonObject.class).getAsJsonObject("event");
+                    assertEquals("server-offer", event.get("runelite_offer_id").getAsString());
+                    assertEquals(NOW - 86400, event.get("started_at").getAsLong());
+                    assertEquals(7200, event.get("spent_amount").getAsInt());
+                    assertEquals(3, event.get("event_sequence").getAsInt());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void loginNeverAdoptsAnUnrelatedRepricedOrTerminalServerOffer() throws Exception
+    {
+        for (String[] scenario : new String[][]{{"1300", "partially_filled"}, {"1200", "completed"}})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                for (int slot = 0; slot < 8; slot++) h.liveOffers[slot] = liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY);
+                h.liveOffers[0] = liveOffer(4151, 1200, 10, 6, GrandExchangeOfferState.SELLING);
+                set(h.plugin, "loginReconciliationPending", true);
+                set(h.plugin, "serverStateCheckPending", true);
+                set(h.plugin, "loggedInTicks", 8);
+                invoke(h.plugin, "checkServerSlotStateIfPossible");
+                h.calls.get(0).respond(loginServerState("unrelated-server-offer", 4,
+                    Integer.parseInt(scenario[0]), scenario[1]));
+                h.drain();
+                assertNull(((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1));
+            }
+        }
+    }
+
+    private static GrandExchangeOffer liveOffer(int item, int price, int total, int filled, GrandExchangeOfferState state)
+    {
+        return (GrandExchangeOffer) Proxy.newProxyInstance(GrandExchangeOffer.class.getClassLoader(),
+            new Class<?>[]{GrandExchangeOffer.class}, (proxy, method, arguments) -> {
+                switch (method.getName())
+                {
+                    case "getState": return state;
+                    case "getItemId": return item;
+                    case "getPrice": return price;
+                    case "getTotalQuantity": return total;
+                    case "getQuantitySold": return filled;
+                    case "getSpent": return filled * price;
+                    default: return primitiveDefault(method.getReturnType());
+                }
+            });
+    }
+
+    @Test
+    public void failedLoginStateReadStillJournalsCompletedTradesAndCollectionForRetry() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            for (int slot = 0; slot < 8; slot++) h.liveOffers[slot] = liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY);
+            h.liveOffers[0] = liveOffer(4151, 1200, 10, 4, GrandExchangeOfferState.SELLING);
+            set(h.plugin, "loginReconciliationPending", true);
+            set(h.plugin, "serverStateCheckPending", true);
+            set(h.plugin, "loggedInTicks", 8);
+            invoke(h.plugin, "checkServerSlotStateIfPossible");
+            h.calls.get(0).fail();
+            h.drain();
+            assertTrue((Long) get(h.plugin, "workerBackoffUntil") > NOW);
+            GrandExchangeOfferChanged change = new GrandExchangeOfferChanged();
+            change.setSlot(0);
+            change.setOffer(liveOffer(4151, 1200, 10, 10, GrandExchangeOfferState.SOLD));
+            h.plugin.onGrandExchangeOfferChanged(change);
+            change.setOffer(liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY));
+            h.plugin.onGrandExchangeOfferChanged(change);
+            EventJournal journal = (EventJournal) get(h.plugin, "eventJournal");
+            List<EventJournal.Entry> events = journal.readHead(10);
+            assertEquals("The sale and real collection survive the failed bootstrap", 2, events.size());
+            JsonObject sold = GSON.fromJson(events.get(0).eventJson, JsonObject.class);
+            JsonObject collected = GSON.fromJson(events.get(1).eventJson, JsonObject.class);
+            assertEquals("sell_completed", sold.get("eventType").getAsString());
+            assertEquals("slot_emptied", collected.get("eventType").getAsString());
+            assertEquals(12000, sold.get("spentAmount").getAsInt());
+            assertEquals(sold.get("offerId"), collected.get("offerId"));
+            assertEquals("Backoff stays bounded despite incoming real events", 1, h.calls.size());
+            set(h.plugin, "workerBackoffUntil", 0L);
+            invoke(h.plugin, "pumpWorkerRequests");
+            TestCall retry = h.calls.get(h.calls.size() - 1);
+            assertTrue(retry.request.url().encodedPath().endsWith("/ge-slots/sync"));
+            Buffer buffer = new Buffer();
+            retry.request.body().writeTo(buffer);
+            assertEquals(sold.get("eventId"), GSON.fromJson(buffer.readUtf8(), JsonObject.class)
+                .getAsJsonObject("event").get("event_id"));
+        }
+    }
+
+    private static String loginServerState(String offerId, int filled, int price, String status)
+    {
+        JsonArray slots = new JsonArray();
+        for (int number = 1; number <= 8; number++)
+        {
+            JsonObject row = new JsonObject();
+            row.addProperty("slot_number", number);
+            row.addProperty("status", number == 1 ? status : "empty");
+            if (number == 1)
+            {
+                row.addProperty("item_id", 4151);
+                row.addProperty("item_name", "Whip");
+                row.addProperty("side", "sell");
+                row.addProperty("price", price);
+                row.addProperty("total_quantity", 10);
+                row.addProperty("filled_quantity", filled);
+                row.addProperty("spent_amount", filled * price);
+                row.addProperty("runelite_offer_id", offerId);
+                row.addProperty("started_at", NOW - 86400);
+                row.addProperty("last_event_at", NOW - 100);
+                row.addProperty("event_sequence", 2);
+                row.addProperty("version", 10);
+            }
+            slots.add(row);
+        }
+        return "{\"success\":true,\"data\":" + GSON.toJson(slots) + "}";
+    }
 
     @Test
     public void focusedEmptyHourlyResponseAndClosingGeKeepTheFiveGlobalFlips() throws Exception
@@ -840,6 +1292,7 @@ public class OverviewListContinuityTest
         long accountHash = 42;
         GameState gameState = GameState.LOGIN_SCREEN;
         int focusedItem;
+        final GrandExchangeOffer[] liveOffers = new GrandExchangeOffer[8];
         OsrsFlipperSyncPanel panel;
 
         Harness(Path folder) throws Exception
@@ -854,7 +1307,7 @@ public class OverviewListContinuityTest
                         case "getAccountHash": return accountHash;
                         case "getGameState": return gameState;
                         case "isClientThread": return true;
-                        case "getGrandExchangeOffers": return new GrandExchangeOffer[8];
+                        case "getGrandExchangeOffers": return liveOffers;
                         case "getWidget":
                             if (focusedItem <= 0 || arguments.length != 1) return null;
                             if (arguments[0].equals(InterfaceID.GeOffers.SETUP)) return setup;

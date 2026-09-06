@@ -1,6 +1,15 @@
-# OSRS Flipper Sync v5.2.34
+# OSRS Flipper Sync v5.2.35
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.35 — Cash en verkopen over herstarts en middernacht
+
+- Tijdelijke lege GE-slots bij uitloggen sluiten een doorlopend offer niet meer. Loginherstel hergebruikt bekende serveridentiteiten; echte waarnemingen blijven ook bij netwerkuitval duurzaam in de bestaande outbox staan.
+- Een geslaagde cashwijziging werkt het paneel direct bij. Oudere antwoorden kunnen een nieuwere cashversie niet terugzetten. Onjuiste bedragen en inconsistente totalen worden afgewezen; negatieve reconciliatiesaldi blijven zichtbaar.
+- Worker 99.0.5 verwerkt een nieuwe lokale offer-ID en herstartvolgnummer als voortgang van hetzelfde bewezen open offer. Regressies controleren gedeeltelijke verkopen, voltooiing na afwezigheid, retries en herstel na een onderbroken verwerking.
+- Dagwinst hoort bij het verkoopmoment. Duurzame serverrevisies verversen gewijzigde cijfers ook tussen Worker-instanties, zonder extra historiescans.
+- Het geselecteerde aankoopadvies herberekent aantal en cycluswinst met de getoonde prijzen, beschikbare cash, limiet en reeds opgehaalde marktcapaciteit. Een werkelijke nul krijgt een concrete reden; ontbrekende capaciteit wordt niet als nul voorgesteld.
+- Tests gebruiken uitsluitend een geïsoleerd RuneLite-profiel. Cloudflare blijft Free voor twee gebruikers.
 
 ## 5.2.34 — Sneller herstel van marktprijzen
 

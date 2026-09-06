@@ -567,7 +567,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             return "Wacht op actuele marktprijzen om uitvoerbare flips te bepalen.";
         }
-        if (overview.cash.available == 0)
+        if (overview.cash.available <= 0)
         {
             return "Geen vrije GP beschikbaar voor een nieuwe flip. Controleer je cash en GE-offers.";
         }
@@ -634,6 +634,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         boolean buying = focusedCard && "buy".equals(focusedOfferSide);
         boolean selling = focusedCard && "sell".equals(focusedOfferSide);
         card.add(compactMetric("Aantal", quantityText(opportunity)));
+        if (!opportunity.quantityReason.isEmpty())
+        {
+            JLabel reason = wrapLabel("<small>" + escapeHtml(opportunity.quantityReason) + "</small>", 176);
+            reason.setForeground(MUTED);
+            reason.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(reason);
+        }
         if (opportunity.hasBuyLimit())
         {
             card.add(compactMetric("Limiet gebruikt", buyLimitUsage(opportunity)));

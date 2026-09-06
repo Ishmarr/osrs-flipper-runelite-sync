@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.34";
+    private static final String PLUGIN_VERSION = "5.2.35";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -206,6 +206,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean serverStateCheckPending;
     private boolean manualSyncPending;
     private boolean loginReconciliationPending;
+    private boolean loginIdentityReady;
     private boolean geOpenReconciliationPending;
     private int loggedInTicks;
     private int geOpenTicks;
@@ -341,6 +342,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         lastTradePrices.clear();
         geItemPresence.clear();
         loginReconciliationPending = client.getGameState() == GameState.LOGGED_IN;
+        loginIdentityReady = false;
         geOpenReconciliationPending = false;
         loggedInTicks = 0;
         geOpenTicks = 0;
@@ -496,6 +498,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             switchToCurrentAccount();
             loginReconciliationPending = true;
+            loginIdentityReady = false;
             loggedInTicks = 0;
             heartbeatTicks = HEARTBEAT_GAME_TICKS;
             serverStateTicks = SERVER_STATE_GAME_TICKS;
@@ -510,10 +513,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (state == GameState.LOGGING_IN || state == GameState.HOPPING || state == GameState.CONNECTION_LOST)
+        if (state == GameState.LOGGING_IN || state == GameState.HOPPING || state == GameState.CONNECTION_LOST ||
+            state == GameState.LOGIN_SCREEN)
         {
             persistCurrentAccount();
             loginReconciliationPending = true;
+            loginIdentityReady = false;
             loggedInTicks = 0;
         }
     }
@@ -534,7 +539,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             loggedInTicks++;
             if (loggedInTicks >= LOGIN_RECONCILE_TICKS)
             {
-                if (reconcileAllSlots(
+                if (!loginIdentityReady)
+                {
+                    serverStateCheckPending = true;
+                    checkServerSlotStateIfPossible();
+                }
+                else if (reconcileAllSlots(
                     "login",
                     SnapshotSyncPolicy.ReconcileMode.ALWAYS))
                 {
@@ -543,6 +553,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     flushOutboxIfPossible();
                     checkServerSlotStateIfPossible();
                 }
+            }
+            if (loginReconciliationPending)
+            {
+                // Real logged-in GE events still enter the durable outbox.
+                // This read only seeds identities before the array reconciliation.
+                flushOutboxIfPossible();
+                return;
             }
         }
 
@@ -659,7 +676,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     @Subscribe
     public void onGrandExchangeOfferChanged(GrandExchangeOfferChanged event)
     {
-        if (!started)
+        if (!started || client.getGameState() != GameState.LOGGED_IN)
         {
             return;
         }
@@ -675,13 +692,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (loginReconciliationPending && offer.getState() == GrandExchangeOfferState.EMPTY)
+        SlotSnapshot previous = slotSnapshots.get(event.getSlot() + 1);
+        if (loginReconciliationPending && offer.getState() == GrandExchangeOfferState.EMPTY &&
+            (loggedInTicks < LOGIN_RECONCILE_TICKS || previous == null || !isTerminal(previous.status)))
         {
-            debug("Voorlopige EMPTY-event tijdens login genegeerd voor slot {}", event.getSlot() + 1);
+            debug("Voorlopig EMPTY-event tijdens login genegeerd voor slot {}", event.getSlot() + 1);
             return;
         }
 
-        SlotSnapshot previous = slotSnapshots.get(event.getSlot() + 1);
         String nextSide = sideFor(offer.getState());
         boolean newOrRepricedOffer = nextSide != null && offer.getItemId() > 0 &&
             (previous == null ||
@@ -1268,6 +1286,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         String reason,
         SnapshotSyncPolicy.ReconcileMode snapshotMode)
     {
+        if (loginReconciliationPending && !loginIdentityReady) return false;
         GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
         if (!hasCompleteRuneLiteSlotArray(offers))
         {
@@ -1870,7 +1889,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         boolean continuingDurableSnapshot = pendingSnapshot != null;
         if (!snapshotPending || workerRequests.isActive() || snapshotInFlight || requestInFlight ||
-            loginReconciliationPending ||
+            (loginReconciliationPending && !continuingDurableSnapshot) ||
             (hasQueuedEvents() && !continuingDurableSnapshot) ||
             statusInFlight || heartbeatInFlight || slotStateInFlight || pairingInFlight ||
             !hasDeviceToken() || client.getGameState() != GameState.LOGGED_IN || now() < workerBackoffUntil)
@@ -2176,9 +2195,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void checkServerSlotStateIfPossible()
     {
+        boolean loginBootstrap = loginReconciliationPending && !loginIdentityReady &&
+            loggedInTicks >= LOGIN_RECONCILE_TICKS && hasCompleteRuneLiteSlotArray(client.getGrandExchangeOffers());
         if (!serverStateCheckPending || slotStateInFlight || anyWorkerRequestInFlight() ||
-            loginReconciliationPending ||
-            hasQueuedEvents() || snapshotPending || !hasDeviceToken() ||
+            (loginReconciliationPending && !loginBootstrap) ||
+            hasQueuedEvents() || pendingSnapshot != null || (snapshotPending && !loginBootstrap) || !hasDeviceToken() ||
             client.getGameState() != GameState.LOGGED_IN)
         {
             return;
@@ -2264,6 +2285,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             markWorkerSuccess();
             serverStateRetryAttempts = 0;
             serverStateNextAttemptAt = 0;
+            if (loginReconciliationPending && !loginIdentityReady)
+            {
+                if (!adoptLoginOfferIdentities(response.data))
+                {
+                    serverStateCheckPending = true;
+                    return;
+                }
+                loginIdentityReady = true;
+                serverStateCheckPending = false;
+                return;
+            }
             reconcileWithServerState(response.data);
             return;
         }
@@ -2320,6 +2352,57 @@ public class OsrsFlipperSyncPlugin extends Plugin
             healthSuccess(SyncHealthTracker.Channel.EVENTS);
         }
         debug("Lokale GE-slots en serverversies zijn gelijk");
+    }
+
+    private boolean adoptLoginOfferIdentities(List<ServerSlotState> serverRows)
+    {
+        GrandExchangeOffer[] liveOffers = client.getGrandExchangeOffers();
+        if (!hasCompleteRuneLiteSlotArray(liveOffers)) return false;
+        for (ServerSlotState server : serverRows)
+        {
+            if (server == null || server.slot_number < 1 || server.slot_number > SLOT_COUNT ||
+                isBlank(server.runelite_offer_id) || "empty".equals(server.status)) continue;
+            GrandExchangeOffer live = liveOffers[server.slot_number - 1];
+            if (live == null || live.getState() == null || live.getItemId() != server.item_id ||
+                !Objects.equals(sideFor(live.getState()), server.side) || live.getPrice() != server.price ||
+                live.getTotalQuantity() != server.total_quantity || live.getQuantitySold() < server.filled_quantity ||
+                live.getSpent() < server.spent_amount) continue;
+            SlotSnapshot local = slotSnapshots.get(server.slot_number);
+            if (local == null)
+            {
+                // An open server offer plus monotone cumulative RuneLite fills
+                // establishes continuity. A previously terminal offer cannot:
+                // an identical new trade may have happened while this client was absent.
+                if (isTerminal(server.status) || server.item_id <= 0 || server.price <= 0 ||
+                    server.total_quantity <= 0 || server.filled_quantity < 0 || server.spent_amount < 0) continue;
+                local = new SlotSnapshot();
+                local.slotNumber = server.slot_number;
+                local.itemId = server.item_id;
+                local.itemName = server.item_name;
+                local.side = server.side;
+                local.price = server.price;
+                local.totalQuantity = server.total_quantity;
+                local.filledQuantity = server.filled_quantity;
+                local.spentAmount = server.spent_amount;
+                local.status = server.status;
+                local.offerId = server.runelite_offer_id;
+                local.startedAt = server.started_at;
+                local.lastEventAt = server.last_event_at;
+                local.timerStartedAt = server.started_at;
+                local.lastFillAt = server.filled_quantity > 0 ? server.last_event_at : 0;
+                local.timerFillHighWaterMark = server.filled_quantity;
+                slotSnapshots.put(server.slot_number, local);
+            }
+            if (Objects.equals(local.offerId, server.runelite_offer_id) &&
+                local.itemId == server.item_id && Objects.equals(local.side, server.side) &&
+                local.price == server.price && local.totalQuantity == server.total_quantity)
+            {
+                // Metadata may advance; locally observed fills and timers never rewind.
+                adoptServerMetadata(server.slot_number, local, server);
+            }
+        }
+        persistCurrentAccount();
+        return true;
     }
 
     private boolean compareAndMergeServerState(List<ServerSlotState> serverRows)
@@ -2692,6 +2775,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerPumpActive = true;
         try
         {
+            if (loginReconciliationPending && !loginIdentityReady &&
+                pendingSnapshot == null && !hasQueuedEvents())
+            {
+                checkServerSlotStateIfPossible();
+                return;
+            }
             boolean fullOverviewDue = (overviewRefreshPending ||
                 syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW)) &&
                 now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW);
@@ -2964,6 +3053,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (client.getGameState() == GameState.LOGGED_IN)
         {
             loginReconciliationPending = true;
+            loginIdentityReady = false;
             loggedInTicks = 0;
         }
         refreshSidePanel();
@@ -4109,10 +4199,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     () -> {
                     cashInFlight = false;
                     cashInFlightUpdate = null;
-                    if (statusCode >= 200 && statusCode < 300 && WorkerResponseValidation.cash(body))
+                    RuneliteOverviewView.CashBalance acknowledgedCash = statusCode >= 200 && statusCode < 300
+                        ? WorkerResponseValidation.cashBalance(body) : null;
+                    if (acknowledgedCash != null)
                     {
                         cashRetryAttempts = 0;
                         clearPendingCashIfSame(submittedUpdate);
+                        overview = overview.withCash(acknowledgedCash);
+                        refreshSidePanel();
                         setConnectionStatus("Cashstack accountbreed opgeslagen");
                         requestOverview(true);
                     }
@@ -4317,7 +4411,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         int itemId = quantityEditorItemId();
-        int quantity = overview.maximumQuantityForItem(itemId);
+        int quantity = currentGeQuantity(itemId);
         if (quantity <= 0 || !"buy".equals(
             FocusedGeItemResolver.resolveSide(true, widgetTreeText(setup), false, null)))
         {
@@ -4381,7 +4475,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             hideEditorSuggestion(parent, true);
             return;
         }
-        int quantity = overview.maximumQuantityForItem(expectedItemId);
+        int quantity = currentGeQuantity(expectedItemId);
         if (quantity <= 0)
         {
             hideEditorSuggestion(parent, true);
@@ -4397,6 +4491,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return 0;
         }
         return resolveSelectedGeOpportunity(itemId, side).price(side);
+    }
+
+    private int currentGeQuantity(int itemId)
+    {
+        RuneliteOverviewView.Opportunity opportunity = resolveSelectedGeOpportunity(itemId, "buy").opportunity;
+        return opportunity == null || !opportunity.hasQuantity() ? 0 : opportunity.effectiveMaximumQuantity();
     }
 
     private SelectedGeOpportunityResolver.Resolution resolveSelectedGeOpportunity(
@@ -4425,7 +4525,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             exact,
             context == FocusedGeItemResolver.EditorContext.NEW_SETUP && "sell".equals(side)
                 ? openCycleOffer(itemId, side)
-                : null);
+                : null,
+            overview.cash.updatedAt > 0 || overview.cash.version >= 0
+                ? overview.cash.available : null);
     }
 
     private FlipperOfferView exactSelectedOffer(int itemId, String side, int selectedSlot)
