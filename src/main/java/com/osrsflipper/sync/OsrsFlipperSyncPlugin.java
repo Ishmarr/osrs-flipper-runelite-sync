@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.35";
+    private static final String PLUGIN_VERSION = "5.2.36";
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -223,6 +223,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int serverStateRetryAttempts;
     private long serverStateNextAttemptAt;
     private int cashRetryAttempts;
+    private long cashNextAttemptAt;
     private long workerBackoffUntil;
     private String snapshotReason;
     private PendingSnapshot pendingSnapshot;
@@ -559,6 +560,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 // Real logged-in GE events still enter the durable outbox.
                 // This read only seeds identities before the array reconciliation.
                 flushOutboxIfPossible();
+                tickReadOnlyViews();
+                pumpWorkerRequests();
+                flushMarketPriceQueue();
+                updateHealthPanel();
                 return;
             }
         }
@@ -619,6 +624,19 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
         }
 
+        tickReadOnlyViews();
+
+        observePriceTestItemPresence();
+
+        flushOutboxIfPossible();
+        checkServerSlotStateIfPossible();
+        pumpWorkerRequests();
+        flushMarketPriceQueue();
+        updateHealthPanel();
+    }
+
+    private void tickReadOnlyViews()
+    {
         marketPriceTicks++;
         if (marketPriceTicks >= MARKET_PRICE_GAME_TICKS)
         {
@@ -637,14 +655,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             requestOverview(true);
         }
-
-        observePriceTestItemPresence();
-
-        flushOutboxIfPossible();
-        checkServerSlotStateIfPossible();
-        pumpWorkerRequests();
-        flushMarketPriceQueue();
-        updateHealthPanel();
     }
 
     @Subscribe
@@ -1124,7 +1134,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     statusInFlight = false;
                     statusCheckPending = true;
                     statusNextAttemptAt = scheduleTransientRetry(++statusRetryAttempts);
-                    registerWorkerBackoff(statusNextAttemptAt);
                     if (!manualSyncPending)
                     {
                         setConnectionStatus("Gekoppeld, Worker tijdelijk niet bereikbaar");
@@ -1181,7 +1190,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         statusCheckPending = true;
         statusNextAttemptAt = scheduleTransientRetry(++statusRetryAttempts);
-        registerWorkerBackoff(statusNextAttemptAt);
+        if (statusCode == 429) registerWorkerBackoff(statusNextAttemptAt);
         String failure = statusCode >= 200 && statusCode < 300 ? "ongeldig statusantwoord" : "HTTP " + statusCode;
         if (!manualSyncPending)
         {
@@ -1238,7 +1247,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     () -> {
                     heartbeatInFlight = false;
                     heartbeatNextAttemptAt = scheduleTransientRetry(++heartbeatRetryAttempts);
-                    registerWorkerBackoff(heartbeatNextAttemptAt);
                     healthFailure(SyncHealthTracker.Channel.HEARTBEAT, "netwerkfout/time-out");
                     debug("Heartbeat mislukt; nieuwe poging na {} seconden: {}",
                         Math.max(0, heartbeatNextAttemptAt - now()), exception.getMessage());
@@ -1271,7 +1279,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     else
                     {
                         heartbeatNextAttemptAt = scheduleTransientRetry(++heartbeatRetryAttempts);
-                        registerWorkerBackoff(heartbeatNextAttemptAt);
+                        if (statusCode == 429) registerWorkerBackoff(heartbeatNextAttemptAt);
                         healthFailure(SyncHealthTracker.Channel.HEARTBEAT,
                             statusCode >= 200 && statusCode < 300 ? "ongeldig heartbeatantwoord" : "HTTP " + statusCode);
                         debug("Heartbeat kreeg HTTP {}; nieuwe poging na {} seconden",
@@ -1794,7 +1802,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         if (queued != null)
         {
-            registerWorkerBackoff(queued.nextAttemptAt);
             healthFailure(SyncHealthTracker.Channel.EVENTS, "netwerkfout/time-out");
         }
         LOG.warn("GE-synchronisatie mislukt; event blijft in de wachtrij: {}", exception.getMessage());
@@ -1810,13 +1817,24 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
+        long continuationDelay = statusCode == 202
+            ? WorkerResponseValidation.eventContinuationDelaySeconds(responseText, eventId) : 0;
+        if (continuationDelay > 0 && ++queued.continuationAttempts <= 8)
+        {
+            // Continue the same durable intent through bounded Worker phases.
+            // An endless processing response falls back to the normal failure
+            // backoff below; it cannot poll once per second forever.
+            queued.nextAttemptAt = now() + continuationDelay;
+            persistCurrentAccount();
+            return;
+        }
+
         if (statusCode >= 200 && statusCode < 300)
         {
             SyncResponse syncResponse = parseSyncResponse(responseText);
             if (syncResponse == null || !syncResponse.isCompleteFor(eventId))
             {
                 scheduleRetry(queued);
-                registerWorkerBackoff(queued.nextAttemptAt);
                 healthFailure(SyncHealthTracker.Channel.EVENTS, "ongeldig serverantwoord");
                 persistCurrentAccount();
                 return;
@@ -1861,7 +1879,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (statusCode >= 400 && statusCode < 500 && statusCode != 408 && statusCode != 429)
+        if (statusCode >= 400 && statusCode < 500 && !retryableWorkerHttpStatus(statusCode))
         {
             if (!acknowledgeQueuedEvent(eventId))
             {
@@ -1879,7 +1897,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         scheduleRetry(queued);
-        registerWorkerBackoff(queued.nextAttemptAt);
+        if (statusCode == 429) registerWorkerBackoff(queued.nextAttemptAt);
         persistCurrentAccount();
         healthFailure(SyncHealthTracker.Channel.EVENTS, "HTTP " + statusCode);
         LOG.warn("GE-synchronisatie kreeg HTTP {}; nieuwe poging volgt", statusCode);
@@ -2007,7 +2025,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // kunnen achterlaten zonder lifecycle- of cashherstel.
             scheduleSnapshotRetry(pendingSnapshot);
             persistCurrentAccount();
-            registerWorkerBackoff(pendingSnapshot.nextAttemptAt);
         }
         if (manualSyncPending)
         {
@@ -2028,7 +2045,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         ServerStateResponse stateResponse = parseServerStateResponse(body);
-        if (statusCode >= 200 && statusCode < 300 && stateResponse != null && stateResponse.success)
+        boolean processingResponse = stateResponse != null && "snapshot_processing".equals(stateResponse.code);
+        if (statusCode >= 200 && statusCode < 300 && stateResponse != null && stateResponse.success && !processingResponse)
         {
             markWorkerSuccess();
             pendingSnapshot = null;
@@ -2111,13 +2129,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if ((statusCode == 202 || statusCode == 503) && stateResponse != null &&
-            "snapshot_processing".equals(stateResponse.code))
+        long continuationDelay = statusCode == 202 || statusCode == 503
+            ? WorkerResponseValidation.snapshotContinuationDelaySeconds(body, snapshotId) : 0;
+        if (continuationDelay > 0 && ++pendingSnapshot.continuationAttempts <= 64)
         {
             // Een grote inhaalsnapshot wordt door de Worker bewust in kleine,
             // CPU-veilige delen verwerkt. Dit is voortgang, geen storing: houd
             // hetzelfde durable ID vast en vraag de volgende tranche snel op.
-            pendingSnapshot.nextAttemptAt = now() + 1L;
+            // Eight abandoned old receipts plus eight current slots can take
+            // four bounded phases each. Beyond that budget, use the ordinary
+            // failure delay and permit reads while keeping this exact intent.
+            pendingSnapshot.nextAttemptAt = now() + continuationDelay;
             snapshotPending = true;
             persistCurrentAccount();
             debug("Worker verwerkt slotsnapshot {} verder", snapshotId);
@@ -2126,7 +2148,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
 
         if (statusCode == 409 ||
-            (stateResponse != null && Boolean.TRUE.equals(stateResponse.reconcile_required)))
+            (!processingResponse && stateResponse != null && Boolean.TRUE.equals(stateResponse.reconcile_required)))
         {
             healthFailure(SyncHealthTracker.Channel.STATE, "slotconflict; herstel actief");
             applyServerStateRows(stateResponse == null ? null : stateResponse.data);
@@ -2151,7 +2173,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
 
-        if (statusCode >= 400 && statusCode < 500 && statusCode != 408 && statusCode != 429)
+        if (statusCode >= 400 && statusCode < 500 && !retryableWorkerHttpStatus(statusCode))
         {
             pendingSnapshot = null;
             snapshotPending = false;
@@ -2175,7 +2197,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         // pas na de succesvolle retry als nieuwe snapshot verstuurd.
         scheduleSnapshotRetry(pendingSnapshot);
         serverStateCheckPending = true;
-        registerWorkerBackoff(pendingSnapshot.nextAttemptAt);
+        if (statusCode == 429) registerWorkerBackoff(pendingSnapshot.nextAttemptAt);
         persistCurrentAccount();
         if (manualSyncPending)
         {
@@ -2237,7 +2259,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     slotStateInFlight = false;
                     serverStateCheckPending = true;
                     serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
-                    registerWorkerBackoff(serverStateNextAttemptAt);
                     if (manualSyncPending)
                     {
                         setConnectionStatus("Synchronisatie controleren; Worker tijdelijk niet bereikbaar...");
@@ -2272,7 +2293,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 serverStateCheckPending = true;
                 serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
-                registerWorkerBackoff(serverStateNextAttemptAt);
                 if (manualSyncPending)
                 {
                     setConnectionStatus("Synchronisatie controleren; onvolledig serverantwoord...");
@@ -2308,7 +2328,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         serverStateCheckPending = true;
         serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
-        registerWorkerBackoff(serverStateNextAttemptAt);
+        if (statusCode == 429) registerWorkerBackoff(serverStateNextAttemptAt);
         if (manualSyncPending)
         {
             setConnectionStatus("Synchronisatie controleren; Worker gaf HTTP " + statusCode + "...");
@@ -2332,7 +2352,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (!recoveryQueued)
             {
                 serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
-                registerWorkerBackoff(serverStateNextAttemptAt);
             }
             return;
         }
@@ -2751,7 +2770,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void preemptOverviewForGeDelivery()
     {
-        if (workerRequests.activeKind() != WorkerRequestCoordinator.Kind.OVERVIEW)
+        if (workerRequests.activeKind() != WorkerRequestCoordinator.Kind.OVERVIEW || priorityRequestWaitingForRetry())
         {
             return;
         }
@@ -2776,7 +2795,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         try
         {
             if (loginReconciliationPending && !loginIdentityReady &&
-                pendingSnapshot == null && !hasQueuedEvents())
+                pendingSnapshot == null && !hasQueuedEvents() && !priorityRequestWaitingForRetry())
             {
                 checkServerSlotStateIfPossible();
                 return;
@@ -2787,6 +2806,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
             boolean focusOverviewDue = pendingFocusedOverviewItemId > 0 &&
                 pendingFocusedOverviewItemId == focusedGeItemId &&
                 now() >= syncHealth.retryAt(SyncHealthTracker.Channel.FOCUS);
+            if (priorityRequestWaitingForRetry())
+            {
+                // The earlier financial intent still owns the write queue. A
+                // retry deadline is not runnable work and must not starve reads.
+                if (fullOverviewDue) requestOverview(false);
+                else if (focusOverviewDue) requestFocusedOverview(pendingFocusedOverviewItemId);
+                return;
+            }
             WorkerRequestCoordinator.Kind next = nextWorkerRequestKind(
                 pendingSnapshot != null,
                 hasQueuedEvents(),
@@ -2830,6 +2857,30 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             workerPumpActive = false;
         }
+    }
+
+    private boolean priorityRequestWaitingForRetry()
+    {
+        // Continue small snapshot_processing tranches before starting reads.
+        // Real failures have their own bounded pause; HTTP 429 also cools down
+        // every endpoint through workerBackoffUntil.
+        if (pendingSnapshot != null)
+        {
+            return pendingSnapshot.attempts > 0 && pendingSnapshot.nextAttemptAt > now();
+        }
+        QueuedEvent head = outbox.peekFirst();
+        if (head != null)
+        {
+            return head.event != null && head.attempts > 0 && head.nextAttemptAt > now();
+        }
+        if (hasQueuedEvents() || (snapshotPending && !loginReconciliationPending &&
+            client.getGameState() == GameState.LOGGED_IN)) return false;
+        if (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN)
+        {
+            return serverStateRetryAttempts > 0 && serverStateNextAttemptAt > now();
+        }
+        if (pendingCashUpdate != null) return cashNextAttemptAt > now();
+        return statusCheckPending && statusNextAttemptAt > now();
     }
 
     static WorkerRequestCoordinator.Kind nextWorkerRequestKind(
@@ -3070,6 +3121,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         cashInFlightUpdate = null;
         cashInFlight = false;
         cashRetryAttempts = 0;
+        cashNextAttemptAt = 0;
     }
 
     private Path journalRoot()
@@ -3745,16 +3797,17 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             return;
         }
-        // Handmatige/focusrefresh omzeilt de foutbackoff niet. Eerst GE-delta's
-        // afleveren; de onafhankelijke Wiki-prijsaanvragen blijven beschikbaar.
+        // Reads may use a GE retry pause without changing financial ordering.
+        // Their own failure backoff and the shared HTTP 429 cooldown still apply.
         SyncHealthTracker.Channel channel = focusItemId > 0
             ? SyncHealthTracker.Channel.FOCUS : SyncHealthTracker.Channel.OVERVIEW;
         if (now() < syncHealth.retryAt(channel) ||
             now() < workerBackoffUntil || workerRequests.isActive() ||
             requestInFlight || snapshotInFlight || slotStateInFlight || statusInFlight ||
             heartbeatInFlight || cashInFlight ||
-            (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
-            hasQueuedEvents() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))
+            (!priorityRequestWaitingForRetry() &&
+                ((serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
+                    hasQueuedEvents() || (snapshotPending && client.getGameState() == GameState.LOGGED_IN))))
         {
             rememberOverviewRequest(focusItemId, freshMarket, freshBuyLimits);
             return;
@@ -3802,7 +3855,13 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (focusItemId > 0 && pendingFocusedOverviewItemId == focusItemId) pendingFocusedOverviewItemId = 0;
         overviewInFlightFreshMarket = freshMarket;
         overviewInFlightFreshBuyLimits = freshBuyLimits;
-        if (focusItemId == 0) overviewTicks = 0;
+        if (focusItemId == 0)
+        {
+            overviewTicks = 0;
+            // This full request consumes the earlier delayed refresh intent.
+            // Successful GE delivery still requests a fresh follow-up itself.
+            forcedOverviewDelayTicks = 0;
+        }
         workerCall.enqueue(new Callback()
         {
             @Override
@@ -3899,6 +3958,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (statusCode < 200 || statusCode >= 300)
         {
             healthFailure(channel, "HTTP " + statusCode);
+            if (statusCode == 429) registerWorkerBackoff(syncHealth.retryAt(channel));
             rememberFailedOverviewRequest(requestFocusItemId);
             finishOverviewRequest(
                 requestAccountHash,
@@ -4130,7 +4190,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         persistCurrentAccount();
         if (cashInFlight || workerRequests.isActive() || hasQueuedEvents() || snapshotPending ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
-            now() < workerBackoffUntil)
+            now() < cashNextAttemptAt || now() < workerBackoffUntil)
         {
             setConnectionStatus("Cashstack staat in de synchronisatiewachtrij...");
             return;
@@ -4143,7 +4203,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (!started || pendingCashUpdate == null || cashInFlight || !hasDeviceToken() ||
             workerRequests.isActive() || hasQueuedEvents() || snapshotPending ||
             (serverStateCheckPending && client.getGameState() == GameState.LOGGED_IN) ||
-            now() < workerBackoffUntil)
+            now() < cashNextAttemptAt || now() < workerBackoffUntil)
         {
             return;
         }
@@ -4180,8 +4240,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     () -> {
                     cashInFlight = false;
                     cashInFlightUpdate = null;
-                    long retryAt = scheduleTransientRetry(++cashRetryAttempts);
-                    registerWorkerBackoff(retryAt);
+                    cashNextAttemptAt = scheduleTransientRetry(++cashRetryAttempts);
                     setConnectionStatus("Cashstack blijft in wachtrij; automatisch herstel actief");
                     debug("Cashstack opslaan mislukt: {}", exception.getMessage());
                     }));
@@ -4204,6 +4263,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     if (acknowledgedCash != null)
                     {
                         cashRetryAttempts = 0;
+                        cashNextAttemptAt = 0;
                         clearPendingCashIfSame(submittedUpdate);
                         overview = overview.withCash(acknowledgedCash);
                         refreshSidePanel();
@@ -4216,8 +4276,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     }
                     else if (retryableWorkerHttpStatus(statusCode) || (statusCode >= 200 && statusCode < 300))
                     {
-                        long retryAt = scheduleTransientRetry(++cashRetryAttempts);
-                        registerWorkerBackoff(retryAt);
+                        cashNextAttemptAt = scheduleTransientRetry(++cashRetryAttempts);
+                        if (statusCode == 429) registerWorkerBackoff(cashNextAttemptAt);
                         setConnectionStatus("Cashstack blijft in wachtrij; " +
                             (statusCode >= 200 && statusCode < 300 ? "ongeldig serverantwoord" : "HTTP " + statusCode));
                         debug("Cashstack kreeg tijdelijke HTTP {}; automatische retry volgt", statusCode);
@@ -4225,6 +4285,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     else
                     {
                         cashRetryAttempts = 0;
+                        cashNextAttemptAt = 0;
                         clearPendingCashIfSame(submittedUpdate);
                         setConnectionStatus("Cashstack kreeg HTTP " + statusCode);
                         debug("Cashstackantwoord: {}", abbreviate(body, 300));
@@ -6160,6 +6221,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         String reason;
         List<Map<String, Object>> slots;
         int attempts;
+        int continuationAttempts;
         long nextAttemptAt;
 
         Map<String, Object> toApiMap()
@@ -6179,6 +6241,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     {
         SyncEvent event;
         int attempts;
+        int continuationAttempts;
         long nextAttemptAt;
     }
 }

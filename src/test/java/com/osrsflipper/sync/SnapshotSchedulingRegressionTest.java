@@ -149,7 +149,7 @@ public class SnapshotSchedulingRegressionTest
                 plugin,
                 snapshotId,
                 status,
-                "{\"success\":false,\"code\":\"snapshot_processing\"," +
+                "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\"," +
                     "\"reconcile_required\":false}");
 
             assertSame(pending, field(plugin, "pendingSnapshot"));

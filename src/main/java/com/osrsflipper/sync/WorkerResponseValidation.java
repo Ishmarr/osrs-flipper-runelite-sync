@@ -8,6 +8,49 @@ import java.util.Locale;
 /** Validate the existing Worker contracts before acknowledging local commands. */
 final class WorkerResponseValidation
 {
+    static long snapshotContinuationDelaySeconds(String body, String snapshotId)
+    {
+        try
+        {
+            JsonObject root = new JsonParser().parse(body).getAsJsonObject();
+            if (!explicitFalse(root, "success") || !bool(root, "retryable") ||
+                !explicitFalse(root, "reconcile_required") ||
+                !"snapshot_processing".equals(string(root, "code"))) return 0;
+            // Legacy chunk responses may omit the ID. Their HTTP callback is
+            // already bound to the same immutable snapshot and account context.
+            if (root.has("snapshot_id") && !string(root, "snapshot_id").equals(snapshotId)) return 0;
+            if (root.has("snapshot") &&
+                !string(root.getAsJsonObject("snapshot"), "snapshot_id").equals(snapshotId)) return 0;
+            if (!root.has("retry_after_ms")) return 1;
+            long milliseconds = integer(root, "retry_after_ms");
+            return milliseconds > 0 && milliseconds <= 30_000 ? Math.max(1, (milliseconds + 999) / 1000) : 0;
+        }
+        catch (RuntimeException exception) { return 0; }
+    }
+
+    private static boolean explicitFalse(JsonObject root, String name)
+    {
+        JsonElement value = root.get(name);
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() &&
+            !value.getAsBoolean();
+    }
+
+    static long eventContinuationDelaySeconds(String body, String eventId)
+    {
+        try
+        {
+            JsonObject root = new JsonParser().parse(body).getAsJsonObject();
+            JsonElement success = root.get("success");
+            if (success == null || !success.isJsonPrimitive() || !success.getAsJsonPrimitive().isBoolean() ||
+                success.getAsBoolean() || !bool(root, "retryable") ||
+                !"event_processing".equals(string(root, "code")) ||
+                eventId == null || !eventId.equals(string(root, "event_id"))) return 0;
+            long milliseconds = integer(root, "retry_after_ms");
+            return milliseconds > 0 && milliseconds <= 30_000 ? Math.max(1, (milliseconds + 999) / 1000) : 0;
+        }
+        catch (RuntimeException exception) { return 0; }
+    }
+
     static boolean cash(String body)
     {
         return cashBalance(body) != null;

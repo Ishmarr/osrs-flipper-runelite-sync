@@ -28,7 +28,7 @@ dependencyLocking {
 }
 
 group = 'com.osrsflipper'
-version = '5.2.35'
+version = '5.2.36'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'

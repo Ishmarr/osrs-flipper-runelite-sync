@@ -58,7 +58,7 @@ public class CashUpdateRetryTest
             server.apply(first);
             first.fail();
             harness.drainCallbacks();
-            assertTrue((Long) field(harness.plugin, "workerBackoffUntil") > 0);
+            assertTrue((Long) field(harness.plugin, "cashNextAttemptAt") > 0);
 
             // A GE mutation (or the other user's device) changes the committed balance.
             server.balance -= 100;
@@ -166,7 +166,7 @@ public class CashUpdateRetryTest
                 assertFalse((Boolean) field(harness.plugin, "cashInFlight"));
                 assertFalse((Boolean) field(harness.plugin, "overviewInFlight"));
                 assertEquals(1, harness.calls.size());
-                assertTrue((Long) field(harness.plugin, "workerBackoffUntil") > 0);
+                assertTrue((Long) field(harness.plugin, "cashNextAttemptAt") > 0);
                 harness.retryNow();
                 TestCall retry = harness.cashCall(1);
                 assertEquals(first.requestId(), retry.requestId());
@@ -204,7 +204,7 @@ public class CashUpdateRetryTest
             assertSame(original, harness.pending());
             assertEquals(1, harness.calls.size());
             assertFalse((Boolean) field(harness.plugin, "cashInFlight"));
-            assertTrue((Long) field(harness.plugin, "workerBackoffUntil") > 0);
+            assertTrue((Long) field(harness.plugin, "cashNextAttemptAt") > 0);
             harness.retryNow();
             assertEquals(first.requestId(), harness.cashCall(1).requestId());
         }
@@ -293,6 +293,7 @@ public class CashUpdateRetryTest
         void retryNow() throws Exception
         {
             set(plugin, "workerBackoffUntil", 0L);
+            set(plugin, "cashNextAttemptAt", 0L);
             invoke(plugin, "pumpWorkerRequests", new Class<?>[0]);
         }
 

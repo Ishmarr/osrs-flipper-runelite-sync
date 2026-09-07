@@ -458,7 +458,7 @@ public class OverviewListContinuityTest
             invoke(h.plugin, "checkServerSlotStateIfPossible");
             h.calls.get(0).fail();
             h.drain();
-            assertTrue((Long) get(h.plugin, "workerBackoffUntil") > NOW);
+            assertTrue((Long) get(h.plugin, "serverStateNextAttemptAt") > NOW);
             GrandExchangeOfferChanged change = new GrandExchangeOfferChanged();
             change.setSlot(0);
             change.setOffer(liveOffer(4151, 1200, 10, 10, GrandExchangeOfferState.SOLD));
@@ -474,9 +474,7 @@ public class OverviewListContinuityTest
             assertEquals("slot_emptied", collected.get("eventType").getAsString());
             assertEquals(12000, sold.get("spentAmount").getAsInt());
             assertEquals(sold.get("offerId"), collected.get("offerId"));
-            assertEquals("Backoff stays bounded despite incoming real events", 1, h.calls.size());
-            set(h.plugin, "workerBackoffUntil", 0L);
-            invoke(h.plugin, "pumpWorkerRequests");
+            assertEquals("A failed read must not prevent durable delivery through the healthy GE endpoint", 2, h.calls.size());
             TestCall retry = h.calls.get(h.calls.size() - 1);
             assertTrue(retry.request.url().encodedPath().endsWith("/ge-slots/sync"));
             Buffer buffer = new Buffer();
@@ -1187,6 +1185,415 @@ public class OverviewListContinuityTest
         }
     }
 
+    @Test
+    public void repeatedGe503KeepsViewsAliveWithoutReorderingOrDiscardingDurableSales() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW, false, true, 1000));
+            h.drain();
+            h.enableGameTicks();
+            enqueueSale(h, 4);
+            TestCall delivery = h.calls.get(h.calls.size() - 1);
+            String originalBody = requestBody(delivery);
+            String firstId = GSON.fromJson(originalBody, JsonObject.class).getAsJsonObject("event")
+                .get("event_id").getAsString();
+            for (int attempt = 1; attempt <= 6; attempt++)
+            {
+                invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+                delivery.respond(503, "{\"success\":false,\"error\":\"temporary fixture\"}");
+                h.drain();
+                assertEquals("A due read must run during the GE retry pause", attempt + 1, h.overviewCalls().size());
+                TestCall read = h.overviewCalls().get(attempt);
+                assertNull("Recovery must not force an upstream market refresh", read.request.url().queryParameter("fresh_market"));
+                assertNull(read.request.url().queryParameter("fresh_buy_limits"));
+                assertEquals("The immutable sale must remain in the durable journal", firstId,
+                    ((EventJournal) get(h.plugin, "eventJournal")).readHead(1).get(0).eventId);
+                if (attempt == 1)
+                {
+                    enqueueSale(h, 10);
+                    assertFalse("Later trades cannot preempt a read while the earlier trade is backing off", read.cancelled);
+                    invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
+                }
+                read.respond(payload(TOP_IDS, 0, NOW + attempt, false, true, 1000 + attempt));
+                h.drain();
+                assertEquals(1000 + attempt, h.view().cash.available);
+                assertTrue(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                assertTrue(h.renderedPanelText().contains("Fixture item 1001"));
+                int count = h.workerCalls().size();
+                h.ticks(30);
+                assertEquals("Neither retry nor ordinary ticks may produce a request storm", count, h.workerCalls().size());
+                assertEquals("Cash mutations must wait until earlier sales settle", 0,
+                    h.calls.stream().filter(call -> "PUT".equals(call.request.method())).count());
+                Object head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+                long deadline = (Long) get(head, "nextAttemptAt");
+                assertTrue(deadline > Instant.now().getEpochSecond());
+                assertTrue(deadline - Instant.now().getEpochSecond() <= 300);
+                set(head, "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                delivery = h.calls.get(h.calls.size() - 1);
+                assertEquals(originalBody, requestBody(delivery));
+            }
+            delivery.respond(eventAck(firstId, "duplicate"));
+            h.drain();
+            TestCall second = h.calls.get(h.calls.size() - 1);
+            JsonObject secondEvent = GSON.fromJson(requestBody(second), JsonObject.class).getAsJsonObject("event");
+            assertEquals(10, secondEvent.get("filled_quantity").getAsInt());
+            assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            second.respond(eventAck(secondEvent.get("event_id").getAsString(), "applied"));
+            h.drain();
+            assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+        }
+    }
+
+    @Test
+    public void temporary425KeepsTheSaleBut429StillCoolsDownEveryWorkerRequest() throws Exception
+    {
+        for (int status : new int[]{425, 429})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                enqueueSale(h, 4);
+                TestCall sale = h.calls.get(0);
+                invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+                sale.respond(status, "{}");
+                h.drain();
+                assertEquals("A temporary HTTP status must never discard a financial event", 1,
+                    ((EventJournal) get(h.plugin, "eventJournal")).size());
+                assertEquals(status == 429 ? 0 : 1, h.overviewCalls().size());
+                if (status == 429)
+                {
+                    h.ticks(30);
+                    assertEquals("Rate limiting applies to reads as well", 1, h.workerCalls().size());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void loginGeRetryStillRefreshesTheListAndOldReadCannotCrossAccounts() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            enqueueSale(h, 4);
+            EventJournal originalJournal = (EventJournal) get(h.plugin, "eventJournal");
+            h.calls.get(0).respond(503, "{}");
+            h.drain();
+            set(h.plugin, "loginReconciliationPending", true);
+            set(h.plugin, "loginIdentityReady", false);
+            set(h.plugin, "overviewTicks", 1000);
+            h.ticks(1);
+            assertEquals("Login reconciliation may block writes, never all read refreshes", 1, h.overviewCalls().size());
+            TestCall oldRead = h.overviewCalls().get(0);
+            h.accountHash = 99;
+            invoke(h.plugin, "switchToCurrentAccount");
+            h.disableUnrelatedScheduling();
+            oldRead.respond(payload(TOP_IDS, 0, NOW, false, true, 99_999));
+            h.drain();
+            assertTrue(h.view().hourly.isEmpty());
+            assertEquals(1, originalJournal.size());
+            h.accountHash = 42;
+            invoke(h.plugin, "switchToCurrentAccount");
+            h.disableUnrelatedScheduling();
+            assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            invoke(h.plugin, "pumpWorkerRequests");
+            assertEquals(requestBody(h.calls.get(0)), requestBody(h.calls.get(h.calls.size() - 1)));
+        }
+    }
+
+    @Test
+    public void snapshot503AllowsReadsButItsExactIntentStillPrecedesLaterSales() throws Exception
+    {
+        for (int status : new int[]{425, 503})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                set(h.plugin, "snapshotPending", true);
+                invoke(h.plugin, "sendFullSnapshotIfPossible");
+                TestCall first = h.calls.get(0);
+                String snapshotBody = requestBody(first);
+                invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+                first.respond(status, "{}");
+                h.drain();
+                assertEquals(1, h.overviewCalls().size());
+                TestCall read = h.overviewCalls().get(0);
+                enqueueSale(h, 10);
+                assertFalse(read.cancelled);
+                read.respond(payload(TOP_IDS, 0, NOW, false, true, 1000));
+                h.drain();
+                assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+                set(get(h.plugin, "pendingSnapshot"), "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                assertEquals(snapshotBody, requestBody(h.calls.get(h.calls.size() - 1)));
+                assertTrue(h.calls.get(h.calls.size() - 1).request.url().encodedPath().endsWith("/ge-slots/snapshot"));
+            }
+        }
+    }
+
+    @Test
+    public void boundedEventProcessingContinuesTheSameIntentAndCannotPollForever() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            enqueueSale(h, 4);
+            String original = requestBody(h.calls.get(0));
+            String eventId = GSON.fromJson(original, JsonObject.class).getAsJsonObject("event").get("event_id").getAsString();
+            String processing = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\",\"event_id\":\"" +
+                eventId + "\",\"retry_after_ms\":250}";
+            for (int phase = 1; phase <= 9; phase++)
+            {
+                h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
+                h.drain();
+                if (phase > 8)
+                {
+                    TestCall read = h.workerCalls().get(h.workerCalls().size() - 1);
+                    assertTrue("An exhausted continuation budget must let pending reads recover",
+                        read.request.url().encodedPath().endsWith("/overview"));
+                    read.respond(payload(TOP_IDS, 0, NOW, false, true, 1000));
+                    h.drain();
+                }
+                Object head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+                assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+                assertEquals(phase > 8, h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                assertEquals(phase > 8 ? 1 : 0, get(head, "attempts"));
+                assertTrue((Long) get(head, "nextAttemptAt") > Instant.now().getEpochSecond());
+                int count = h.workerCalls().size();
+                h.ticks(10);
+                assertEquals(count, h.workerCalls().size());
+                set(head, "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                assertEquals(original, requestBody(h.calls.get(h.calls.size() - 1)));
+            }
+            h.calls.get(h.calls.size() - 1).respond(eventAck(eventId, "applied"));
+            h.drain();
+            assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+        }
+    }
+
+    @Test
+    public void eventProcessingRequiresExplicitMatchingIdentityAndBoundedNumericDelay()
+    {
+        String valid = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\"," +
+            "\"event_id\":\"current\",\"retry_after_ms\":250}";
+        assertEquals(1, WorkerResponseValidation.eventContinuationDelaySeconds(valid, "current"));
+        for (String invalid : new String[]{valid.replace("current", "previous"), valid.replace("250", "-1"),
+            valid.replace("250", "30001"), valid.replace("250", "\"250\""), valid.replace("false", "true"),
+            valid.replace("\"retryable\":true", "\"retryable\":false"), "null", "{}", "<html>503</html>"})
+        {
+            assertEquals(0, WorkerResponseValidation.eventContinuationDelaySeconds(invalid, "current"));
+        }
+    }
+
+    @Test
+    public void failedLoginStateReadCannotStarveHealthyOverviewAndRetriesRemainBounded() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            for (int slot = 0; slot < 8; slot++) h.liveOffers[slot] = liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY);
+            set(h.plugin, "loginReconciliationPending", true);
+            set(h.plugin, "serverStateCheckPending", true);
+            set(h.plugin, "loggedInTicks", 8);
+            invoke(h.plugin, "checkServerSlotStateIfPossible");
+            invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+            h.calls.get(0).respond(503, "{}");
+            h.drain();
+            assertEquals(1, h.overviewCalls().size());
+            h.overviewCalls().get(0).respond(payload(TOP_IDS, 0, NOW, false, true, 1234));
+            h.drain();
+            assertEquals(TOP_IDS, h.ids());
+            assertEquals(1234, h.view().cash.available);
+            assertTrue(h.health().failed(SyncHealthTracker.Channel.STATE));
+            h.ticks(30);
+            assertEquals(2, h.workerCalls().size());
+            set(h.plugin, "serverStateNextAttemptAt", 0L);
+            invoke(h.plugin, "pumpWorkerRequests");
+            assertEquals(3, h.workerCalls().size());
+            assertTrue(h.workerCalls().get(2).request.url().encodedPath().endsWith("/ge-slots/state"));
+        }
+    }
+
+    @Test
+    public void statusHeartbeatAndCashFailuresCannotFreezeHealthyReadOnlyViews() throws Exception
+    {
+        for (String route : new String[]{"status", "heartbeat", "cash"})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                h.requestFull(true).respond(payload(TOP_IDS, 0, NOW, false, true, 1000));
+                h.drain();
+                String deadline;
+                if ("status".equals(route))
+                {
+                    set(h.plugin, "statusCheckPending", true);
+                    invoke(h.plugin, "checkDeviceStatus");
+                    deadline = "statusNextAttemptAt";
+                }
+                else if ("heartbeat".equals(route))
+                {
+                    invoke(h.plugin, "sendHeartbeat");
+                    deadline = "heartbeatNextAttemptAt";
+                }
+                else
+                {
+                    invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
+                    deadline = "cashNextAttemptAt";
+                }
+                TestCall failed = h.workerCalls().get(h.workerCalls().size() - 1);
+                String submitted = failed.request.body() == null ? null : requestBody(failed);
+                invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+                failed.respond(503, "{}");
+                h.drain();
+                assertEquals("Healthy reads must survive a failed " + route, 2, h.overviewCalls().size());
+                h.overviewCalls().get(1).respond(payload(TOP_IDS, 0, NOW, false, true, 2000));
+                h.drain();
+                assertEquals(2000, h.view().cash.available);
+                assertEquals(TOP_IDS, h.ids());
+                h.ticks(30);
+                assertEquals("Retry cadence must remain bounded for " + route, 3, h.workerCalls().size());
+                assertTrue((Long) get(h.plugin, deadline) > Instant.now().getEpochSecond());
+                set(h.plugin, deadline, 0L);
+                if ("heartbeat".equals(route)) invoke(h.plugin, "sendHeartbeat");
+                else invoke(h.plugin, "pumpWorkerRequests");
+                TestCall retry = h.workerCalls().get(h.workerCalls().size() - 1);
+                assertEquals(failed.request.url(), retry.request.url());
+                if (submitted != null) assertEquals(submitted, requestBody(retry));
+            }
+        }
+    }
+
+    @Test
+    public void overview429AlsoCoolsDownGeWritesUntilTheSharedDeadline() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            h.requestFull(true).respond(429, "{}");
+            h.drain();
+            assertTrue((Long) get(h.plugin, "workerBackoffUntil") > Instant.now().getEpochSecond());
+            enqueueSale(h, 10);
+            h.ticks(20);
+            assertEquals(1, h.workerCalls().size());
+            assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            set(h.plugin, "workerBackoffUntil", 0L);
+            invoke(h.plugin, "pumpWorkerRequests");
+            assertEquals(2, h.workerCalls().size());
+            assertTrue(h.workerCalls().get(1).request.url().encodedPath().endsWith("/ge-slots/sync"));
+        }
+    }
+
+    @Test
+    public void snapshotContinuationBudgetSurvivesRestartAndCannotFreezeReadsForever() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            set(h.plugin, "snapshotPending", true);
+            invoke(h.plugin, "sendFullSnapshotIfPossible");
+            String original = requestBody(h.calls.get(0));
+            String id = GSON.fromJson(original, JsonObject.class).get("snapshot_id").getAsString();
+            String processing = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\"," +
+                "\"reconcile_required\":false,\"retry_after_ms\":1000,\"snapshot_id\":\"" + id + "\"}";
+            invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+            for (int phase = 1; phase <= 65; phase++)
+            {
+                TestCall call = h.workerCalls().get(h.workerCalls().size() - 1);
+                call.respond(phase % 2 == 0 ? 503 : 202, processing);
+                h.drain();
+                Object pending = get(h.plugin, "pendingSnapshot");
+                assertNotNull(pending);
+                assertEquals(phase, get(pending, "continuationAttempts"));
+                JsonObject persisted = GSON.fromJson(((EventJournal) get(h.plugin, "eventJournal")).readState(), JsonObject.class);
+                assertEquals("A restart must not reset an exhausted continuation budget", phase,
+                    persisted.getAsJsonObject("pendingSnapshot").get("continuationAttempts").getAsInt());
+                assertEquals(phase > 64, h.health().failed(SyncHealthTracker.Channel.STATE));
+                if (phase == 2)
+                {
+                    enqueueSale(h, 10);
+                    invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
+                }
+                if (phase > 64)
+                {
+                    assertEquals(1, h.overviewCalls().size());
+                    h.overviewCalls().get(0).respond(payload(TOP_IDS, 0, NOW, false, true, 2000));
+                    h.drain();
+                    assertEquals(TOP_IDS, h.ids());
+                    assertEquals(2000, h.view().cash.available);
+                    assertEquals(1, get(pending, "attempts"));
+                    assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+                }
+                else assertEquals(0, h.overviewCalls().size());
+                assertEquals(0, h.workerCalls().stream().filter(value -> "PUT".equals(value.request.method())).count());
+                set(pending, "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                assertEquals(original, requestBody(h.workerCalls().get(h.workerCalls().size() - 1)));
+            }
+        }
+    }
+
+    @Test
+    public void malformedSnapshotProgressNeverAcknowledgesOrEntersTheFastRetryLoop() throws Exception
+    {
+        String valid = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\"," +
+            "\"reconcile_required\":false,\"retry_after_ms\":1000}";
+        assertEquals(1, WorkerResponseValidation.snapshotContinuationDelaySeconds(valid, "current"));
+        assertEquals(1, WorkerResponseValidation.snapshotContinuationDelaySeconds(
+            valid.replace(",\"retry_after_ms\":1000", ""), "current"));
+        for (String malformed : new String[]{valid.replace("1000", "\"1000\""),
+            valid.replace("1000", "30001"), valid.replace("1000", "-1"),
+            valid.replace("\"retryable\":true", "\"retryable\":false"),
+            valid.replace("\"success\":false", "\"success\":true"),
+            valid.replace("\"reconcile_required\":false", "\"reconcile_required\":true"),
+            valid.replace("1000}", "1000,\"snapshot_id\":\"other\"}"),
+            valid.replace("1000}", "1000,\"snapshot\":{\"snapshot_id\":\"other\"}}"),
+            "{\"code\":\"snapshot_processing\"}"})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                set(h.plugin, "snapshotPending", true);
+                invoke(h.plugin, "sendFullSnapshotIfPossible");
+                Object pending = get(h.plugin, "pendingSnapshot");
+                h.calls.get(0).respond(202, malformed);
+                h.drain();
+                assertSame("Malformed progress must retain the unresolved durable snapshot", pending, get(h.plugin, "pendingSnapshot"));
+                assertEquals(1, get(pending, "attempts"));
+                assertEquals(0, get(pending, "continuationAttempts"));
+                assertTrue(h.health().failed(SyncHealthTracker.Channel.STATE));
+            }
+        }
+    }
+
+    private static void enqueueSale(Harness h, int filled)
+    {
+        GrandExchangeOfferChanged change = new GrandExchangeOfferChanged();
+        change.setSlot(0);
+        change.setOffer(liveOffer(4151, 1200, 10, filled,
+            filled == 10 ? GrandExchangeOfferState.SOLD : GrandExchangeOfferState.SELLING));
+        h.plugin.onGrandExchangeOfferChanged(change);
+    }
+
+    private static String requestBody(TestCall call) throws IOException
+    {
+        Buffer buffer = new Buffer();
+        call.request.body().writeTo(buffer);
+        return buffer.readUtf8();
+    }
+
+    private static String eventAck(String eventId, String outcome)
+    {
+        return "{\"success\":true,\"summary\":{\"received\":1,\"rejected\":0},\"results\":[{\"event_id\":\"" +
+            eventId + "\",\"outcome\":\"" + outcome + "\"}]}";
+    }
+
     private static String pricedPayload(int refreshSeconds, long snapshotAt, long transactionAt,
         boolean stale, int buyPrice, int sellPrice)
     {
@@ -1479,6 +1886,12 @@ public class OverviewListContinuityTest
         List<TestCall> overviewCalls()
         {
             return calls.stream().filter(call -> call.request.url().encodedPath().endsWith("/overview"))
+                .collect(Collectors.toList());
+        }
+
+        List<TestCall> workerCalls()
+        {
+            return calls.stream().filter(call -> "worker.example.test".equals(call.request.url().host()))
                 .collect(Collectors.toList());
         }
 
