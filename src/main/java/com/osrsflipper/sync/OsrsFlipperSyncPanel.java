@@ -89,6 +89,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private List<FlipperOfferView> offers = Collections.emptyList();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
     private Map<Integer, LastTradePriceView> lastTradePrices = Collections.emptyMap();
+    private Map<Integer, MarketPriceView> marketPrices = Collections.emptyMap();
     private int focusedItemId;
     private String focusedOfferSide = "";
     private RuneliteOverviewView.Opportunity resolvedFocusedOpportunity;
@@ -183,6 +184,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         {
             offers = view.offers;
             lastTradePrices = view.lastTradePrices;
+            marketPrices = view.marketPrices;
             focusedItemId = view.focusedItemId;
             focusedOfferSide = view.focusedSide;
             resolvedFocusedOpportunity = view.focusedOpportunity;
@@ -602,6 +604,19 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         RuneliteOverviewView.Opportunity opportunity,
         int rank)
     {
+        if (focusedItemId <= 0)
+        {
+            // A local 1x1 test or Wiki reply can change the executable quantity
+            // before the next overview. Use the same resolver as the GE editor;
+            // replacing only the displayed prices leaves the old size behind.
+            RuneliteOverviewView.Opportunity resolved = SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                opportunity.itemId, opportunity.itemName, "buy", opportunity,
+                marketPrices.get(opportunity.itemId), lastTradePrices.get(opportunity.itemId),
+                null, null, overview.cash.updatedAt > 0 || overview.cash.version >= 0
+                    ? overview.cash.available : null).opportunity;
+            if (resolved != null) opportunity = resolved;
+        }
         JPanel card = cardPanel();
         JPanel header = itemHeader(opportunity.itemId, opportunity.itemName);
         JLabel rankLabel = new JLabel("#" + rank);

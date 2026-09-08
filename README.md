@@ -1,6 +1,14 @@
-# OSRS Flipper Sync v5.2.38
+# OSRS Flipper Sync v5.2.39
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.39 — Aantal na een prijstest direct opnieuw berekend
+
+- De volledige Flips-lijst berekent aantal en totaalwinst met dezelfde prijzen, capaciteit en actuele cash als de geselecteerde kaart en GE-invoerhulp. Een lokale 1×1-prijstest of Wiki-antwoord kan daardoor geen oud aantal bij een nieuwe verliesgevende prijs laten staan.
+- Bij een bekende negatieve marge na GE-tax wordt het uitvoerbare aantal nul, met uitleg. Ontbrekende capaciteit blijft herkenbaar; actieve offers behouden hun bestaande plan. De lijst behoudt alle items en de volgorde van de server.
+- Oudere lokale Wiki-prijzen overschrijven geen nieuwere overviewprijzen. Koop- en verkoopzijde worden afzonderlijk op transactietijd vergeleken; opnieuw downloaden maakt een oude prijs niet vers.
+- Regressies doorlopen echte GE-events en vertraagde overviewcallbacks, winstgevende en verliesgevende prijstests, actuele cash, Wiki-antwoorden, selecteren/sluiten en herhaalde afrondingsbevestigingen. Na een afgeronde koop of snapshot volgt precies één verse kooplimietcontrole; het herberekenen zelf maakt geen nieuwe netwerkaanvragen.
+- Tests gebruiken uitsluitend het geïsoleerde RuneLite-profiel. Cloudflare blijft Free voor twee gebruikers; geen publicatie bij de RuneLite Plugin Hub.
 
 ## 5.2.38 — Inhaalsnapshots met achtergelaten offers
 

@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.38";
+    private static final String PLUGIN_VERSION = "5.2.39";
     private static final int MAX_EVENT_CONTINUATIONS = 16;
     private static final int MAX_SNAPSHOT_CONTINUATIONS = 8 * 32;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
@@ -3662,7 +3662,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         currentPanel.updateView(new FlipperPanelView(offers, overview, lastTradePrices.snapshot(),
             focusedGeItemId, focusedGeSide, focused.opportunity,
             syncHealth.banner((int) Math.min(Integer.MAX_VALUE,
-                Math.max(journalSize, outbox.size()) + unjournaledEvents.size()))));
+                Math.max(journalSize, outbox.size()) + unjournaledEvents.size())), marketPrices));
     }
 
     private void observePriceTestItemPresence()

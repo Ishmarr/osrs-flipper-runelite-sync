@@ -81,7 +81,8 @@ public class SelectedGeOpportunityResolverTest
 
         assertTrue(resolved.opportunity.hasBuyLimit());
         assertEquals(30, overview.maximumQuantityForItem(101));
-        assertEquals("Niet beschikbaar", OsrsFlipperSyncPanel.quantityText(resolved.opportunity));
+        assertEquals("0", OsrsFlipperSyncPanel.quantityText(resolved.opportunity));
+        assertEquals("Geen winst na GE-tax", resolved.opportunity.quantityReason);
         assertEquals("70 / 100", OsrsFlipperSyncPanel.buyLimitUsage(resolved.opportunity));
         assertEquals("30", OsrsFlipperSyncPanel.buyLimitRemaining(resolved.opportunity));
     }

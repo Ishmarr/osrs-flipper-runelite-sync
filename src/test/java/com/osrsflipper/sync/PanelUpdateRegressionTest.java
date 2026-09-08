@@ -107,12 +107,17 @@ public class PanelUpdateRegressionTest
         prices.put(202, price);
         RuneliteOverviewView overview = overview(202, 1000, true);
         RuneliteOverviewView.Opportunity focused = overview.hourly.get(0);
-        FlipperPanelView view = new FlipperPanelView(offers, overview, prices, 202, "sell", focused, "Warning");
+        MarketPriceView market = new MarketPriceView(202, 151, 99, 10, 11, 12);
+        Map<Integer, MarketPriceView> markets = new LinkedHashMap<>();
+        markets.put(202, market);
+        FlipperPanelView view = new FlipperPanelView(offers, overview, prices, 202, "sell", focused, "Warning", markets);
         assertEquals("Sorting must not modify the caller's list", 2, offers.get(0).slotNumber);
         offers.clear();
         prices.clear();
+        markets.clear();
         assertThrows(UnsupportedOperationException.class, () -> view.offers.clear());
         assertThrows(UnsupportedOperationException.class, () -> view.lastTradePrices.clear());
+        assertThrows(UnsupportedOperationException.class, () -> view.marketPrices.clear());
 
         onEdt(() -> panel.updateView(view));
         onEdt(() -> {
@@ -122,6 +127,7 @@ public class PanelUpdateRegressionTest
             assertEquals(2, ((FlipperOfferView) displayed.get(1)).slotNumber);
             assertSame(overview, get(panel, "overview"));
             assertSame(price, ((Map<?, ?>) get(panel, "lastTradePrices")).get(202));
+            assertSame(market, ((Map<?, ?>) get(panel, "marketPrices")).get(202));
             assertSame(focused, get(panel, "resolvedFocusedOpportunity"));
             assertEquals("sell", get(panel, "focusedOfferSide"));
             assertTrue(text((Container) get(panel, "opportunitiesList")).contains("Geselecteerde flip"));
@@ -133,6 +139,7 @@ public class PanelUpdateRegressionTest
             assertTrue(cards.contains("Item 202"));
             assertTrue(cards.contains("Marktgegevens tijdelijk niet beschikbaar"));
             assertSame(overview, get(panel, "overview"));
+            assertTrue(((Map<?, ?>) get(panel, "marketPrices")).isEmpty());
         });
     }
 

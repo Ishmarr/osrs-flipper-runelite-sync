@@ -68,6 +68,231 @@ public class OverviewListContinuityTest
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
     @Test
+    public void completedOneItemPriceTestRepricesTheWholeListAndEditorBeforeALateOverviewReturns() throws Exception
+    {
+        for (boolean profitable : new boolean[]{false, true})
+        {
+            try (Harness h = harness())
+            {
+                h.attachPanel();
+                h.enableGameTicks();
+                List<Integer> ids = Arrays.asList(451, 1002, 1003, 1004, 1005);
+                JsonObject response = GSON.fromJson(payload(ids, 0, NOW, false, true, 100_000_000), JsonObject.class);
+                JsonObject ore = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+                ore.addProperty("item_name", "Runite ore");
+                ore.addProperty("buy_price", 9784);
+                ore.addProperty("sell_price", 10399);
+                ore.addProperty("instant_buy", 10400);
+                ore.addProperty("instant_sell", 9783);
+                ore.addProperty("maximum_quantity", 4500);
+                ore.addProperty("official_buy_limit", 4500);
+                ore.addProperty("used_buy_limit", 0);
+                ore.addProperty("remaining_buy_limit", 4500);
+                ore.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
+                    "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
+                h.requestFull(true).respond(GSON.toJson(response));
+                h.drain();
+                assertTrue(h.renderedPanelText().contains("Aantal\n4 500\n"));
+
+                TestCall delayed = h.requestFull(true);
+                int requestsBeforeTest = h.calls.size();
+                for (GrandExchangeOffer offer : new GrandExchangeOffer[]{
+                    liveOffer(451, profitable ? 10400 : 9816, 1, 1, GrandExchangeOfferState.BOUGHT),
+                    liveOffer(451, 9763, 1, 1, GrandExchangeOfferState.SOLD),
+                    liveOffer(451, 9763, 1, 1, GrandExchangeOfferState.EMPTY)})
+                {
+                    h.liveOffers[0] = offer;
+                    GrandExchangeOfferChanged changed = new GrandExchangeOfferChanged();
+                    changed.setSlot(0);
+                    changed.setOffer(offer);
+                    h.plugin.onGrandExchangeOfferChanged(changed);
+                }
+                assertEquals("Repricing must reuse the in-flight overview and fetched capacity", requestsBeforeTest, h.calls.size());
+                int expected = profitable ? 4500 : 0;
+                assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+                String updated = h.renderedPanelText();
+                assertTrue(updated, updated.contains("Aantal\n" + (profitable ? "4 500" : "0") + "\n"));
+                if (!profitable) assertTrue(updated, updated.contains("Geen winst na GE-tax"));
+                assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
+
+                // An older authoritative price pair cannot replace the 1x1 pair
+                // observed while this HTTP request was in flight.
+                response.add("price_tests", GSON.fromJson("[{\"item_id\":451,\"last_buy_price\":10400," +
+                    "\"last_sell_price\":9783,\"last_buy_at\":" + (NOW - 60) +
+                    ",\"last_sell_at\":" + (NOW - 59) + "}]", JsonArray.class));
+                response.getAsJsonObject("market_refresh").addProperty("stale", true);
+                delayed.respond(GSON.toJson(response));
+                h.drain();
+                assertEquals(ids, h.ids());
+                assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+                if (profitable)
+                {
+                    RuneliteOverviewView current = h.view();
+                    set(h.plugin, "overview", current.withCash(new RuneliteOverviewView.CashBalance(
+                        2 * 9764, 0, 2 * 9764, NOW)));
+                    invoke(h.plugin, "refreshSidePanel");
+                    expected = 2;
+                    assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+                }
+                String late = h.renderedPanelText();
+                assertTrue(late, late.contains("Aantal\n" + expected + "\n"));
+                assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
+                int completedRequests = h.calls.size();
+                h.focus(451);
+                invoke(h.plugin, "refreshSidePanel");
+                assertTrue(h.renderedPanelText().contains("Aantal\n" + expected + "\n"));
+                assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
+                h.closeFocus();
+                assertEquals(ids, h.ids());
+                assertTrue(h.renderedPanelText().contains("Aantal\n" + expected + "\n"));
+                assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
+                assertEquals("Selecting and closing must not fetch another capacity snapshot", completedRequests, h.calls.size());
+            }
+        }
+    }
+
+    private static void assertRuniteAdvice(Harness h, int quantity, int sellPrice) throws Exception
+    {
+        assertEquals(quantity, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+        assertEquals(9764, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
+        assertEquals(sellPrice, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+        String text = h.renderedPanelText();
+        assertTrue(text, text.contains("Koop\n9 764 gp\n"));
+        assertTrue(text, text.contains("Verkoop\n" + String.format(java.util.Locale.US, "%,d gp", sellPrice).replace(',', ' ') + "\n"));
+        long profit = GeTax.calculateProfitPerItem(9764, sellPrice, 451);
+        String perItem = (profit >= 0 ? "+" : "") + String.format(java.util.Locale.US, "%,d GP", profit).replace(',', ' ');
+        assertTrue(text, text.contains("Winst/item\n" + perItem + "\n"));
+        String cycle = String.format(java.util.Locale.US, "%,d GP", profit * quantity).replace(',', ' ');
+        assertTrue(text, text.contains("\n" + cycle + "\nAantal\n"));
+    }
+
+    @Test
+    public void newerOverviewCannotBeReplacedByAnOlderCachedWikiPriceOnTheListOrEditor() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            invoke(h.plugin, "handleMarketPriceResponse", new Class<?>[]{int.class, int.class, String.class},
+                451, 200, "{\"data\":{\"451\":{\"high\":100,\"low\":90," +
+                    "\"highTime\":" + (NOW - 600) + ",\"lowTime\":" + (NOW - 600) + "}}}");
+            JsonObject response = GSON.fromJson(payload(Arrays.asList(451), 0, NOW, false, true, 100_000_000), JsonObject.class);
+            JsonObject ore = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+            ore.addProperty("buy_price", 151);
+            ore.addProperty("sell_price", 199);
+            ore.addProperty("instant_buy", 200);
+            ore.addProperty("instant_sell", 150);
+            ore.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
+                "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            assertEquals(151, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
+            assertEquals(199, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+            String text = h.renderedPanelText();
+            assertTrue(text, text.contains("Koop\n151 gp\n"));
+            assertTrue(text, text.contains("Verkoop\n199 gp\n"));
+            invoke(h.plugin, "handleMarketPriceResponse", new Class<?>[]{int.class, int.class, String.class},
+                451, 200, "{\"data\":{\"451\":{\"high\":300,\"low\":90," +
+                    "\"highTime\":" + (NOW + 1) + ",\"lowTime\":" + (NOW - 600) + "}}}");
+            assertEquals("Only the genuinely newer side replaces the overview price", 151,
+                invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
+            assertEquals(299, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+            String mixed = h.renderedPanelText();
+            assertTrue(mixed, mixed.contains("Koop\n151 gp\n"));
+            assertTrue(mixed, mixed.contains("Verkoop\n299 gp\n"));
+            assertEquals(1, h.calls.size());
+        }
+    }
+
+    @Test
+    public void unfocusedWikiPriceCallbackUsesTheSameCapacityAsTheQuantityEditor() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            JsonObject response = GSON.fromJson(payload(Arrays.asList(451), 0, NOW, false, true, 100_000_000), JsonObject.class);
+            JsonObject ore = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+            ore.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
+                "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            for (int high : new int[]{10400, 12000})
+            {
+                invoke(h.plugin, "handleMarketPriceResponse", new Class<?>[]{int.class, int.class, String.class},
+                    451, 200, "{\"data\":{\"451\":{\"high\":" + high + ",\"low\":10300," +
+                        "\"highTime\":" + NOW + ",\"lowTime\":" + NOW + "}}}");
+                int expected = high == 10400 ? 0 : 1000;
+                assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+                String text = h.renderedPanelText();
+                assertTrue(text, text.contains("Aantal\n" + (expected == 0 ? "0" : "1 000") + "\n"));
+                assertTrue(text, text.contains("Koop\n10 301 gp\n"));
+                assertEquals("Wiki callback reprices the existing model without requesting another overview", 1, h.calls.size());
+            }
+        }
+    }
+
+    @Test
+    public void oneItemBuyContinuationAndDuplicateAcknowledgementRefreshTheAuthoritativeLimitOnce() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.enableGameTicks();
+            List<Integer> ids = Arrays.asList(451, 1002, 1003, 1004, 1005);
+            h.requestFull(true).respond(payload(ids, 0, NOW, false, true, 100_000_000));
+            h.drain();
+            TestCall earlierRead = h.requestFull(true);
+            for (GrandExchangeOffer offer : new GrandExchangeOffer[]{
+                liveOffer(451, 250, 1, 1, GrandExchangeOfferState.BOUGHT),
+                liveOffer(451, 250, 1, 1, GrandExchangeOfferState.EMPTY)})
+            {
+                h.liveOffers[0] = offer;
+                GrandExchangeOfferChanged changed = new GrandExchangeOfferChanged();
+                changed.setSlot(0);
+                changed.setOffer(offer);
+                h.plugin.onGrandExchangeOfferChanged(changed);
+            }
+            // A read started before the buy may complete with the old limit.
+            // The subsequent financial receipt must still request fresh usage.
+            earlierRead.respond(payload(ids, 0, NOW, false, true, 100_000_000));
+            h.drain();
+            TestCall buy = h.calls.get(h.calls.size() - 1);
+            String originalBody = requestBody(buy);
+            String eventId = GSON.fromJson(originalBody, JsonObject.class).getAsJsonObject("event")
+                .get("event_id").getAsString();
+            buy.respond(202, "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\"," +
+                "\"event_id\":\"" + eventId + "\",\"retry_after_ms\":1000}");
+            h.drain();
+            Deque<?> outbox = (Deque<?>) get(h.plugin, "outbox");
+            set(outbox.peekFirst(), "nextAttemptAt", 0L);
+            invoke(h.plugin, "pumpWorkerRequests");
+            TestCall retry = h.calls.get(h.calls.size() - 1);
+            assertEquals(originalBody, requestBody(retry));
+            retry.respond(eventAck(eventId, "duplicate").replace("\"outcome\":\"duplicate\"",
+                "\"outcome\":\"duplicate\",\"accepted\":true,\"applied\":false," +
+                    "\"duplicate\":true,\"code\":\"post_commit_recovery\""));
+            h.drain();
+            TestCall empty = h.calls.get(h.calls.size() - 1);
+            JsonObject emptyEvent = GSON.fromJson(requestBody(empty), JsonObject.class).getAsJsonObject("event");
+            assertEquals("slot_emptied", emptyEvent.get("event_type").getAsString());
+            empty.respond(eventAck(emptyEvent.get("event_id").getAsString(), "applied"));
+            h.drain();
+            TestCall refresh = h.calls.get(h.calls.size() - 1);
+            assertTrue(refresh.request.url().encodedPath().endsWith("/overview"));
+            assertEquals("1", refresh.request.url().queryParameter("fresh_buy_limits"));
+            JsonObject response = GSON.fromJson(payload(ids, 0, NOW, false, true, 100_000_000), JsonObject.class);
+            JsonObject ore = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+            ore.addProperty("used_buy_limit", 1);
+            ore.addProperty("remaining_buy_limit", 999);
+            refresh.respond(GSON.toJson(response));
+            h.drain();
+            assertEquals(1, h.view().opportunityForItem(451).usedBuyLimit);
+            assertEquals(999, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+            assertTrue(h.renderedPanelText().contains("Limiet gebruikt\n1 / 1 000\n"));
+            assertEquals("Two reads, two identical buy attempts, collection, one fresh overview", 6, h.calls.size());
+        }
+    }
+
+    @Test
     public void focusedRingCallbackRepricesOldZeroAndSharesTheSafeQuantityWithPanelAndEditor() throws Exception
     {
         try (Harness h = harness())
@@ -1476,11 +1701,16 @@ public class OverviewListContinuityTest
             JsonObject complete = new JsonObject();
             complete.addProperty("success", true);
             complete.addProperty("reconcile_required", false);
+            complete.addProperty("duplicate_snapshot", true);
             complete.add("data", submitted.getAsJsonArray("slots"));
             h.workerCalls().get(requestCount - 1).respond(GSON.toJson(complete));
             h.drain();
             assertNull(get(h.plugin, "pendingSnapshot"));
             assertFalse(h.health().failed(SyncHealthTracker.Channel.STATE));
+            assertEquals(requestCount + 1, h.workerCalls().size());
+            TestCall refresh = h.workerCalls().get(requestCount);
+            assertTrue(refresh.request.url().encodedPath().endsWith("/overview"));
+            assertEquals("1", refresh.request.url().queryParameter("fresh_buy_limits"));
         }
     }
 

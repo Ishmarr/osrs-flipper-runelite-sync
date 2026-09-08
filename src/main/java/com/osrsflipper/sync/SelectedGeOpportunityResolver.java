@@ -131,8 +131,13 @@ final class SelectedGeOpportunityResolver
         }
 
         boolean matchingMarket = market != null && market.itemId == itemId;
-        int marketInstantBuy = matchingMarket ? market.instantBuyPrice : 0;
-        int marketInstantSell = matchingMarket ? market.instantSellPrice : 0;
+        long scannerUpdatedAt = scannerOpportunity == null ? 0 : scannerOpportunity.priceUpdatedAt;
+        // A cached local Wiki record must not undo a newer overview. Compare
+        // each price's transaction time, not when an old record was downloaded.
+        int marketInstantBuy = matchingMarket && market.instantBuyAt >= scannerUpdatedAt
+            ? market.instantBuyPrice : 0;
+        int marketInstantSell = matchingMarket && market.instantSellAt >= scannerUpdatedAt
+            ? market.instantSellPrice : 0;
         if (scannerOpportunity == null && marketInstantBuy <= 0 && marketInstantSell <= 0)
         {
             return Resolution.empty();
@@ -148,9 +153,9 @@ final class SelectedGeOpportunityResolver
         int fallbackSell = scannerOpportunity == null ? 0 : scannerOpportunity.sellPrice;
         int buyPrice = FlipPriceResolver.buyPrice(instantSell, fallbackBuy, priceTest);
         int sellPrice = FlipPriceResolver.sellPrice(instantBuy, fallbackSell, priceTest);
-        long priceUpdatedAt = !matchingMarket
-            ? (scannerOpportunity == null ? 0 : scannerOpportunity.priceUpdatedAt)
-            : Math.max(market.instantBuyAt, market.instantSellAt);
+        long priceUpdatedAt = Math.max(scannerUpdatedAt, Math.max(
+            marketInstantBuy > 0 ? market.instantBuyAt : 0,
+            marketInstantSell > 0 ? market.instantSellAt : 0));
         String resolvedItemName = itemName == null ? "" : itemName.trim();
         if (resolvedItemName.isEmpty() && scannerOpportunity != null)
         {
@@ -179,6 +184,15 @@ final class SelectedGeOpportunityResolver
             quantity = (int) Math.min(quantity, Math.max(0, currentCash) / buyPrice);
             cycleProfit = Math.max(0, GeTax.calculateProfitPerItem(buyPrice, sellPrice, itemId)) * quantity;
             if (quantity == 0 && currentCash < buyPrice) quantityReason = "Onvoldoende beschikbare cash";
+        }
+        if (buyPrice > 0 && sellPrice > 0 && GeTax.calculateProfitPerItem(buyPrice, sellPrice, itemId) <= 0)
+        {
+            // Even a legacy response without volume capacity cannot make a
+            // known loss executable. Keep the measured prices and explain zero.
+            quantity = 0;
+            cycleProfit = 0;
+            hourlyProfit = 0;
+            quantityReason = "Geen winst na GE-tax";
         }
         if (quantity == 0 && quantityReason.isEmpty())
         {
