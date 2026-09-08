@@ -132,11 +132,13 @@ final class SelectedGeOpportunityResolver
 
         boolean matchingMarket = market != null && market.itemId == itemId;
         long scannerUpdatedAt = scannerOpportunity == null ? 0 : scannerOpportunity.priceUpdatedAt;
+        long scannerBuyAt = scannerOpportunity == null ? 0 : scannerOpportunity.instantBuyAt;
+        long scannerSellAt = scannerOpportunity == null ? 0 : scannerOpportunity.instantSellAt;
         // A cached local Wiki record must not undo a newer overview. Compare
         // each price's transaction time, not when an old record was downloaded.
-        int marketInstantBuy = matchingMarket && market.instantBuyAt >= scannerUpdatedAt
+        int marketInstantBuy = matchingMarket && market.instantBuyAt >= scannerBuyAt
             ? market.instantBuyPrice : 0;
-        int marketInstantSell = matchingMarket && market.instantSellAt >= scannerUpdatedAt
+        int marketInstantSell = matchingMarket && market.instantSellAt >= scannerSellAt
             ? market.instantSellPrice : 0;
         if (scannerOpportunity == null && marketInstantBuy <= 0 && marketInstantSell <= 0)
         {
@@ -156,6 +158,8 @@ final class SelectedGeOpportunityResolver
         long priceUpdatedAt = Math.max(scannerUpdatedAt, Math.max(
             marketInstantBuy > 0 ? market.instantBuyAt : 0,
             marketInstantSell > 0 ? market.instantSellAt : 0));
+        long instantBuyAt = marketInstantBuy > 0 ? market.instantBuyAt : scannerBuyAt;
+        long instantSellAt = marketInstantSell > 0 ? market.instantSellAt : scannerSellAt;
         String resolvedItemName = itemName == null ? "" : itemName.trim();
         if (resolvedItemName.isEmpty() && scannerOpportunity != null)
         {
@@ -225,7 +229,7 @@ final class SelectedGeOpportunityResolver
                 ? scannerOpportunity.remainingBuyLimit
                 : -1,
             capacity,
-            quantityReason);
+            quantityReason, instantBuyAt, instantSellAt);
         return new Resolution(resolved);
     }
 

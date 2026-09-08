@@ -1,6 +1,15 @@
-# OSRS Flipper Sync v5.2.39
+# OSRS Flipper Sync v5.2.40
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.40 — Gerichte prijscontroles zonder extra cachevertraging
+
+- Een geselecteerd GE-item krijgt direct voorrang en wordt tijdens gebruik ongeveer iedere vijf seconden gecontroleerd. De eerste vijf items van de zichtbare Flips-lijst krijgen iedere vijftien seconden een gerichte controle; overige open offers behouden de minuuttermijn. De verversing wacht niet langer op een tweede interval nadat een lokale cache verloopt.
+- Er loopt maximaal één publieke prijsaanvraag tegelijk, met minstens één seconde tussen starts en een begrensde wachtrij. Trage aanvragen worden geannuleerd; fouten en HTTP 429 krijgen oplopende backoff. Ontbrekende prijszijdes veroorzaken geen onbeperkte snelle retries. Uitloggen, sluiten en accountwissels behouden hun afscherming.
+- De kaarten onderscheiden de laatste geslaagde prijscontrole, het tijdstip van de prijstransactie en de ouderdom van het brede overzicht. De Wiki-bron kan een prijs zelf ongeveer een minuut cachen; een controle garandeert dus geen nieuwe transactie. Koop- en verkoopprijzen gebruiken afzonderlijke transactietijden zodat een recentere prijszijde niet achter de andere blijft hangen.
+- Oudere openbare quotes uit een later serverantwoord zetten waargenomen prijzen niet terug. Nieuwere cash en kooplimieten uit datzelfde antwoord blijven wel verwerkt; een overviewantwoord geldt niet als een nieuwe directe Wiki-controle.
+- Callbackregressies controleren de zichtbare lijst, selectie, prioriteit, bronfouten, timeouts, accountwissels en een echte 1×1-test tijdens een vertraagde overview. Cash, kooplimieten, aantal en GE-invoerhulp blijven samen getest. Alles draait met een geïsoleerd testprofiel.
+- Gerichte Wiki-controles voegen geen financiële Worker-aanvragen toe. Cloudflare blijft Free voor twee gebruikers; publicatie blijft uitsluitend privé en nooit via de RuneLite Plugin Hub.
 
 ## 5.2.39 — Aantal na een prijstest direct opnieuw berekend
 

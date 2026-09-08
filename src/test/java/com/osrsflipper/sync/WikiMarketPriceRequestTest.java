@@ -36,6 +36,134 @@ public class WikiMarketPriceRequestTest
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
     @Test
+    public void focusedPricesRefreshAtFiveSecondsAndStopWhenTheEditorClosesOrUserLogsOut() throws Exception
+    {
+        Harness h = harness();
+        set(h.plugin, "focusedGeItemId", 451);
+        h.refresh(false);
+        h.calls.get(0).succeed(451, 3000);
+        h.drain();
+        h.advance(4);
+        h.refresh(false);
+        assertEquals(1, h.calls.size());
+        h.advance(1);
+        h.refresh(false);
+        assertEquals(2, h.calls.size());
+        h.calls.get(1).succeed(451, 3100);
+        h.drain();
+        set(h.plugin, "focusedGeItemId", 0);
+        h.advance(30);
+        h.refresh(false);
+        assertEquals("No editor, offers or visible list means no background price polling", 2, h.calls.size());
+        h.gameState = GameState.LOGIN_SCREEN;
+        set(h.plugin, "focusedGeItemId", 451);
+        h.refresh(true);
+        h.advance(60);
+        assertEquals("A queued item must not start during logout", 2, h.calls.size());
+    }
+
+    @Test
+    public void selectionGetsQueuePriorityAndRepeatedItemChangesKeepTheQueueBounded() throws Exception
+    {
+        Harness h = harness();
+        h.request(4151, true);
+        for (int item = 100; item < 200; item++) h.request(item, true);
+        assertEquals(16, ((Deque<?>) get(h.plugin, "marketPriceQueue")).size());
+        set(h.plugin, "focusedGeItemId", 451);
+        for (int repeat = 0; repeat < 20; repeat++) h.request(451, true);
+        assertEquals(16, ((Deque<?>) get(h.plugin, "marketPriceQueue")).size());
+        assertEquals(451, ((Deque<?>) get(h.plugin, "marketPriceQueue")).peekFirst());
+        h.clock++;
+        h.calls.get(0).succeed(4151, 3000);
+        h.drain();
+        assertEquals(2, h.calls.size());
+        assertEquals("451", h.calls.get(1).request.url().queryParameter("id"));
+    }
+
+    @Test
+    public void aStalledPriceRequestIsCancelledAndItsLateCallbackCannotUndoRecovery() throws Exception
+    {
+        Harness h = harness();
+        h.request(451, true);
+        TestCall stalled = h.calls.get(0);
+        h.advance(12);
+        assertTrue(stalled.cancelled);
+        h.request(451, true);
+        assertEquals(1, h.calls.size());
+        h.advance(15);
+        h.request(451, true);
+        assertEquals(2, h.calls.size());
+        stalled.succeed(451, 100);
+        h.drain();
+        assertFalse(h.prices().containsKey(451));
+        h.calls.get(1).succeed(451, 3000);
+        h.drain();
+        assertEquals(3000, h.prices().get(451).instantBuyPrice);
+    }
+
+    @Test
+    public void validButOlderPriceSidesUpdateCheckTimeWithoutRegressingObservedTransactions() throws Exception
+    {
+        Harness h = harness();
+        long now = h.clock;
+        h.prices().put(451, new MarketPriceView(451, 3000, 2900, now, now, now - 60));
+        h.request(451, true);
+        h.calls.get(0).respond(200, "{\"data\":{\"451\":{\"high\":100,\"low\":2950," +
+            "\"highTime\":" + (now - 600) + ",\"lowTime\":" + (now + 1) + "}}}");
+        h.drain();
+        assertEquals(3000, h.prices().get(451).instantBuyPrice);
+        assertEquals(2950, h.prices().get(451).instantSellPrice);
+        assertEquals(now, h.prices().get(451).fetchedAt);
+        assertEquals(now, h.prices().get(451).instantBuyAt);
+        assertEquals(now + 1, h.prices().get(451).instantSellAt);
+    }
+
+    @Test
+    public void aMissingSellAnchorDoesNotTurnBackgroundRefreshIntoARequestEverySecond() throws Exception
+    {
+        Harness h = harness();
+        FlipCyclePlanBook cycles = (FlipCyclePlanBook) get(h.plugin, "flipCycles");
+        cycles.recordBuy("pending", "pending", 1, 451, "Runite ore",
+            100, 0, 0, 1, 1, "completed", h.clock, h.clock);
+        h.refresh(false);
+        assertEquals(1, h.calls.size());
+        h.calls.get(0).respond(200, "{\"data\":{\"451\":{\"low\":100,\"lowTime\":" + h.clock + "}}}");
+        h.drain();
+        assertTrue(cycles.needsSellTarget(451));
+        for (int second = 1; second < 60; second++)
+        {
+            h.advance(1);
+            h.refresh(false);
+            assertEquals("Missing high-side data keeps the ordinary background deadline", 1, h.calls.size());
+        }
+        h.advance(1);
+        h.refresh(false);
+        assertEquals(2, h.calls.size());
+        assertTrue(cycles.needsSellTarget(451));
+    }
+
+    @Test
+    public void rateLimitHeadersDelayEveryQueuedItemWithoutDiscardingTheLastPrice() throws Exception
+    {
+        Harness h = harness();
+        h.prices().put(451, new MarketPriceView(451, 3000, 2900, h.clock, h.clock, h.clock - 60));
+        h.request(451, true);
+        h.request(4151, true);
+        h.calls.get(0).respond(429, "{}", "120");
+        h.drain();
+        for (int second = 1; second < 120; second++)
+        {
+            h.advance(1);
+            h.request(451, true);
+            assertEquals(1, h.calls.size());
+        }
+        assertEquals(3000, h.prices().get(451).instantBuyPrice);
+        h.advance(1);
+        assertEquals(2, h.calls.size());
+        assertEquals("4151", h.calls.get(1).request.url().queryParameter("id"));
+    }
+
+    @Test
     public void livePriceRequestRevalidatesTheSharedHttpCache()
     {
         Request request = OsrsFlipperSyncPlugin.wikiMarketPriceRequest(12_780);
@@ -114,6 +242,7 @@ public class WikiMarketPriceRequestTest
             h.request(11840, update % 2 == 0);
         }
         assertEquals(1, h.calls.size());
+        h.clock++;
         h.calls.get(0).succeed(4151, 3000);
         h.drain();
         assertEquals(2, h.calls.size());
@@ -140,6 +269,7 @@ public class WikiMarketPriceRequestTest
         h.drain();
         assertEquals(3000, h.prices().get(4151).instantBuyPrice);
 
+        h.clock++;
         h.request(4151, true);
         assertEquals("A new explicit refresh is not suppressed by the previous request's identity",
             2, h.calls.size());
@@ -162,16 +292,18 @@ public class WikiMarketPriceRequestTest
             if (failure == 0) first.fail();
             else first.respond(failure == 1 ? 503 : 200, "not valid Wiki JSON");
             h.drain();
-            assertEquals("Failure advances the other queued item without retrying the same one twice",
-                2, h.calls.size());
+            assertEquals("Failure cannot immediately start a burst of retries", 1, h.calls.size());
+            for (int repeat = 0; repeat < 20; repeat++) h.request(4151, true);
+            assertEquals(1, h.calls.size());
+            h.advance(15);
+            assertEquals(2, h.calls.size());
             assertEquals("11840", h.calls.get(1).request.url().queryParameter("id"));
             assertFalse(h.prices().containsKey(4151));
 
-            set(h.plugin, "focusedGeItemId", 4151);
-            h.refresh(false);
-            h.refresh(true);
             h.calls.get(1).succeed(11840, 4000);
             h.drain();
+            h.advance(1);
+            h.request(4151, true);
             assertEquals(3, h.calls.size());
             assertEquals("4151", h.calls.get(2).request.url().queryParameter("id"));
             h.calls.get(2).succeed(4151, 5000);
@@ -244,10 +376,13 @@ public class WikiMarketPriceRequestTest
         final Deque<Runnable> callbacks = new ArrayDeque<>();
         final List<TestCall> calls = new ArrayList<>();
         long accountHash = 42;
+        long clock = Instant.now().getEpochSecond();
+        GameState gameState = GameState.LOGGED_IN;
 
         Harness(Path folder) throws Exception
         {
             set(plugin, "gson", new Gson());
+            set(plugin, "marketPriceClock", (java.util.function.LongSupplier) () -> clock);
             set(plugin, "config", new OsrsFlipperSyncConfig() {});
             // No ConfigManager or user profile is accessed by this transport
             // fixture. Even incidental account storage stays in this temp root.
@@ -257,7 +392,7 @@ public class WikiMarketPriceRequestTest
                 new Class<?>[]{Client.class}, (proxy, method, arguments) ->
                 {
                     if ("getAccountHash".equals(method.getName())) return accountHash;
-                    if ("getGameState".equals(method.getName())) return GameState.LOGIN_SCREEN;
+                    if ("getGameState".equals(method.getName())) return gameState;
                     if (method.getReturnType() == boolean.class) return false;
                     if (method.getReturnType() == int.class) return 0;
                     if (method.getReturnType() == long.class) return 0L;
@@ -290,6 +425,11 @@ public class WikiMarketPriceRequestTest
             invoke(plugin, "queueMarketPrice", new Class<?>[]{int.class, boolean.class}, itemId, force);
             invoke(plugin, "flushMarketPriceQueue");
         }
+        void advance(long seconds) throws Exception
+        {
+            clock += seconds;
+            invoke(plugin, "flushMarketPriceQueue");
+        }
         @SuppressWarnings("unchecked") Map<Integer, MarketPriceView> prices() throws Exception
         {
             return (Map<Integer, MarketPriceView>) get(plugin, "marketPrices");
@@ -315,12 +455,18 @@ public class WikiMarketPriceRequestTest
         void succeed(int itemId, int price) throws IOException
         {
             respond(200, "{\"data\":{\"" + itemId + "\":{\"high\":" + price +
-                ",\"low\":2000,\"highTime\":100,\"lowTime\":100}}}");
+                ",\"low\":2000,\"highTime\":" + Instant.now().getEpochSecond() +
+                ",\"lowTime\":" + Instant.now().getEpochSecond() + "}}}");
         }
         void respond(int code, String body) throws IOException
         {
+            respond(code, body, "0");
+        }
+        void respond(int code, String body, String retryAfter) throws IOException
+        {
             callback.onResponse(this, new Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
-                .code(code).message("Fixture").body(ResponseBody.create(MediaType.parse("application/json"), body)).build());
+                .code(code).message("Fixture").header("Retry-After", retryAfter)
+                .body(ResponseBody.create(MediaType.parse("application/json"), body)).build());
         }
         @Override public Request request() { return request; }
         @Override public Response execute() { throw new AssertionError("Real network forbidden"); }

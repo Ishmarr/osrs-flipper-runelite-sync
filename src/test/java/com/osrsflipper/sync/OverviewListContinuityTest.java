@@ -167,6 +167,187 @@ public class OverviewListContinuityTest
     }
 
     @Test
+    public void independentPriceSideTimesAcceptANewerSideBeforeTheOppositeSideChanges() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            invoke(h.plugin, "handleMarketPriceResponse", new Class<?>[]{int.class, int.class, String.class},
+                451, 200, "{\"data\":{\"451\":{\"high\":250,\"low\":90," +
+                    "\"highTime\":" + (NOW - 100) + ",\"lowTime\":" + (NOW - 600) + "}}}");
+            JsonObject response = GSON.fromJson(payload(Arrays.asList(451), 0, NOW, false, true, 100_000_000), JsonObject.class);
+            JsonObject ore = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+            ore.addProperty("buy_price", 151);
+            ore.addProperty("sell_price", 199);
+            ore.addProperty("instant_buy", 200);
+            ore.addProperty("instant_sell", 150);
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            assertEquals("Legacy payloads retain the conservative aggregate timestamp", 199,
+                invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+            ore.addProperty("instant_buy_at", NOW - 600);
+            ore.addProperty("instant_sell_at", NOW);
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            assertEquals(NOW - 600, h.view().opportunityForItem(451).instantBuyAt);
+            assertEquals(NOW, h.view().opportunityForItem(451).instantSellAt);
+            assertEquals(151, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
+            assertEquals(249, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+            String text = h.renderedPanelText();
+            assertTrue(text, text.contains("Koop\n151 gp\n"));
+            assertTrue(text, text.contains("Verkoop\n249 gp\n"));
+            assertEquals(2, h.calls.size());
+        }
+    }
+
+    @Test
+    public void visibleListRefreshesOnlyFivePricesAtTheirDeadlinesAndStopsWhenThePanelHides() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.enableGameTicks();
+            java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(NOW);
+            set(h.plugin, "marketPriceClock", (java.util.function.LongSupplier) clock::get);
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW - 3600, true, true, 100_000_000));
+            h.drain();
+            h.renderedPanelText();
+            set(h.panel, "panelShowing", true);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            for (int index = 0; index < 5; index++)
+            {
+                TestCall price = h.calls.get(h.calls.size() - 1);
+                assertEquals("prices.runescape.wiki", price.request.url().host());
+                int item = TOP_IDS.get(index);
+                assertEquals(Integer.toString(item), price.request.url().queryParameter("id"));
+                price.respond("{\"data\":{\"" + item + "\":{\"high\":250,\"low\":100," +
+                    "\"highTime\":" + (NOW - 120) + ",\"lowTime\":" + (NOW - 120) + "}}}");
+                h.drain();
+                clock.incrementAndGet();
+                invoke(h.plugin, "flushMarketPriceQueue");
+            }
+            assertEquals(6, h.calls.size());
+            assertEquals(1, h.workerCalls().size());
+            String checked = h.renderedPanelText();
+            assertTrue(checked, checked.contains("Marktoverzicht is verouderd"));
+            assertFalse(checked, checked.contains("Nieuwe prijzen worden opgehaald"));
+            assertTrue(checked, checked.contains("Prijscontrole:"));
+            assertTrue(checked, checked.contains("Nieuwste prijstransactie: 2 min geleden"));
+            clock.set(NOW + 14);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            assertEquals(6, h.calls.size());
+            clock.set(NOW + 15);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            assertEquals(7, h.calls.size());
+            set(h.panel, "panelShowing", false);
+            h.calls.get(6).respond("{\"data\":{\"1001\":{\"high\":250,\"low\":100," +
+                "\"highTime\":" + NOW + ",\"lowTime\":" + NOW + "}}}");
+            h.drain();
+            clock.set(NOW + 100);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            assertEquals(7, h.calls.size());
+            assertEquals("Price checks never manufacture financial or Worker requests", 1, h.workerCalls().size());
+        }
+    }
+
+    @Test
+    public void hiddenActiveOffersDoNotTakeAVisibleCardsFastRefreshPlace() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.enableGameTicks();
+            java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(NOW);
+            set(h.plugin, "marketPriceClock", (java.util.function.LongSupplier) clock::get);
+            List<Integer> ids = new ArrayList<>(TOP_IDS);
+            ids.add(0, 1000);
+            h.requestFull(true).respond(payload(ids, 0, NOW, false, true, 100_000_000));
+            h.drain();
+            Class<?> snapshotType = Class.forName(OsrsFlipperSyncPlugin.class.getName() + "$SlotSnapshot");
+            Object active = GSON.fromJson("{\"slotNumber\":1,\"itemId\":1000,\"side\":\"sell\",\"status\":\"active\"," +
+                "\"price\":249,\"totalQuantity\":10,\"filledQuantity\":0,\"startInstabuyPrice\":250,\"startInstasellPrice\":100}", snapshotType);
+            ((Map<Integer, Object>) get(h.plugin, "slotSnapshots")).put(1, active);
+            ((Map<Integer, MarketPriceView>) get(h.plugin, "marketPrices")).put(1000,
+                new MarketPriceView(1000, 250, 100, NOW, NOW, NOW));
+            invoke(h.plugin, "refreshSidePanel");
+            String text = h.renderedPanelText();
+            assertFalse(text, text.contains("Fixture item 1000"));
+            set(h.panel, "panelShowing", true);
+            assertEquals(TOP_IDS, h.panel.activePriceListItems());
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            for (int item : TOP_IDS)
+            {
+                TestCall price = h.calls.get(h.calls.size() - 1);
+                assertEquals(Integer.toString(item), price.request.url().queryParameter("id"));
+                price.respond("{\"data\":{\"" + item + "\":{\"high\":250,\"low\":100," +
+                    "\"highTime\":" + NOW + ",\"lowTime\":" + NOW + "}}}");
+                h.drain();
+                clock.incrementAndGet();
+                invoke(h.plugin, "flushMarketPriceQueue");
+            }
+            assertEquals(6, h.calls.size());
+            assertEquals(1, h.workerCalls().size());
+        }
+    }
+
+    @Test
+    public void laterOverviewWithOlderPublicQuotesKeepsPricesButAcceptsNewCashAndLimits() throws Exception
+    {
+        for (boolean exactTimes : new boolean[]{false, true})
+        {
+            try (Harness h = harness())
+            {
+                h.attachPanel();
+                JsonObject first = GSON.fromJson(payload(Arrays.asList(451), 0, NOW - 5, false, true, 10000), JsonObject.class);
+                first.getAsJsonObject("cash").addProperty("version", 1);
+                if (exactTimes)
+                {
+                    JsonObject row = first.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+                    row.addProperty("instant_buy_at", NOW - 5);
+                    row.addProperty("instant_sell_at", NOW - 5);
+                }
+                h.requestFull(true).respond(GSON.toJson(first));
+                h.drain();
+                JsonObject later = GSON.fromJson(payload(Arrays.asList(451), 0, NOW - 10, false, true, 202), JsonObject.class);
+                later.getAsJsonObject("cash").addProperty("version", 2);
+                JsonObject row = later.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+                row.addProperty("instant_buy", 150);
+                row.addProperty("instant_sell", 90);
+                row.addProperty("buy_price", 91);
+                row.addProperty("sell_price", 149);
+                row.addProperty("used_buy_limit", 997);
+                row.addProperty("remaining_buy_limit", 3);
+                if (exactTimes)
+                {
+                    row.addProperty("instant_buy_at", NOW - 10);
+                    row.addProperty("instant_sell_at", NOW - 10);
+                }
+                row.add("quantity_capacity", GSON.fromJson("{\"cash_available\":202," +
+                    "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
+                h.requestFull(true).respond(GSON.toJson(later));
+                h.drain();
+                assertEquals(202, h.view().cash.available);
+                assertEquals(997, h.view().opportunityForItem(451).usedBuyLimit);
+                for (int view = 0; view < 3; view++)
+                {
+                    if (view == 1) h.focus(451);
+                    if (view == 2) h.closeFocus();
+                    assertEquals(101, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
+                    assertEquals(249, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
+                    assertEquals(2, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
+                    String text = h.renderedPanelText();
+                    assertTrue(text, text.contains("Aantal\n2\n"));
+                    assertTrue(text, text.contains("Koop\n101 gp\n"));
+                    assertTrue(text, text.contains("Verkoop\n249 gp\n"));
+                    assertTrue(text, text.contains("Limiet gebruikt\n997 / 1 000\n"));
+                    assertFalse("Overview receipt is not a direct Wiki check", text.contains("Prijscontrole:"));
+                }
+                assertEquals(2, h.calls.size());
+            }
+        }
+    }
+
+    @Test
     public void newerOverviewCannotBeReplacedByAnOlderCachedWikiPriceOnTheListOrEditor() throws Exception
     {
         try (Harness h = harness())
@@ -1272,7 +1453,7 @@ public class OverviewListContinuityTest
             h.drain();
             assertTrue(h.view().marketAvailable);
             assertTrue(h.view().marketStale);
-            assertTrue(h.renderedPanelText().contains("Marktprijzen zijn verouderd"));
+            assertTrue(h.renderedPanelText().contains("Marktoverzicht is verouderd"));
             h.enableGameTicks();
             h.ticks(24);
             assertEquals(1, h.overviewCalls().size());
@@ -1294,7 +1475,7 @@ public class OverviewListContinuityTest
             assertEquals(NOW - 120, h.view().hourly.get(0).priceUpdatedAt);
             String rendered = h.renderedPanelText();
             assertTrue(rendered.contains("12 345 gp"));
-            assertFalse(rendered.contains("Marktprijzen zijn verouderd"));
+            assertFalse(rendered.contains("Marktoverzicht is verouderd"));
             assertFalse(h.view().marketStale);
             h.ticks(99);
             assertEquals("The next full interval starts when the slow reply arrives", 2, h.overviewCalls().size());
@@ -2136,7 +2317,7 @@ public class OverviewListContinuityTest
             for (String field : new String[]{"snapshotPending", "serverStateCheckPending", "statusCheckPending",
                 "loginReconciliationPending", "geOpenReconciliationPending"}) set(plugin, field, false);
             for (String field : new String[]{"heartbeatTicks", "serverStateTicks", "localReconcileTicks",
-                "fullSnapshotTicks", "marketPriceTicks"}) set(plugin, field, -10_000);
+                "fullSnapshotTicks"}) set(plugin, field, -10_000);
         }
 
         void enableGameTicks() throws Exception

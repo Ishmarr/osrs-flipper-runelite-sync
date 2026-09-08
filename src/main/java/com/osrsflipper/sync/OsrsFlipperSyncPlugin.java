@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.39";
+    private static final String PLUGIN_VERSION = "5.2.40";
     private static final int MAX_EVENT_CONTINUATIONS = 16;
     private static final int MAX_SNAPSHOT_CONTINUATIONS = 8 * 32;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
@@ -116,13 +116,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final int GE_OPEN_RECONCILE_TICKS = 3;
     private static final int HEARTBEAT_GAME_TICKS = 100;
     private static final int SERVER_STATE_GAME_TICKS = 200;
-    private static final int MARKET_PRICE_GAME_TICKS = 100;
     // Een game tick duurt ongeveer 600 ms. De kanslijst wordt dus ongeveer
     // iedere minuut opnieuw opgehaald, terwijl de Worker zijn lichte cache kan
     // blijven gebruiken om onnodige D1-reads te vermijden.
     static final int OVERVIEW_GAME_TICKS = 100;
     private static final int MAX_OUTBOX_SIZE = 500;
     private static final long MARKET_PRICE_CACHE_SECONDS = 60L;
+    private static final long FOCUSED_PRICE_CACHE_SECONDS = 5L;
+    private static final long VISIBLE_PRICE_CACHE_SECONDS = 15L;
+    private static final int MAX_QUEUED_MARKET_PRICES = 16;
     private static final long RETRY_BASE_SECONDS = 5L;
     private static final long RETRY_MAX_SECONDS = 300L;
     private static final long NO_ACCOUNT = Long.MIN_VALUE;
@@ -184,6 +186,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private final Map<Integer, MarketPriceView> marketPrices = new HashMap<>();
     private final Deque<Integer> marketPriceQueue = new ArrayDeque<>();
     private final Set<Integer> queuedMarketPriceItems = new HashSet<>();
+    private final MarketPriceRefreshPolicy marketPricePolicy = new MarketPriceRefreshPolicy();
+    private java.util.function.LongSupplier marketPriceClock = OsrsFlipperSyncPlugin::now;
+    private long marketPriceStartedAt;
     private final LastTradePriceBook lastTradePrices = new LastTradePriceBook();
     private final GeItemPresenceBook geItemPresence = new GeItemPresenceBook();
     private final FlipCyclePlanBook flipCycles = new FlipCyclePlanBook();
@@ -216,7 +221,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private int serverStateTicks;
     private int localReconcileTicks;
     private int fullSnapshotTicks;
-    private int marketPriceTicks;
     private long snapshotSequence;
     private int statusRetryAttempts;
     private long statusNextAttemptAt;
@@ -316,7 +320,6 @@ public class OsrsFlipperSyncPlugin extends Plugin
         serverStateTicks = SERVER_STATE_GAME_TICKS;
         localReconcileTicks = 0;
         fullSnapshotTicks = 0;
-        marketPriceTicks = MARKET_PRICE_GAME_TICKS;
         marketPriceInFlight = false;
         invalidateOverviewContext();
         cashInFlight = false;
@@ -340,6 +343,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         snapshotReason = "startup";
         pendingSnapshot = null;
         marketPrices.clear();
+        marketPricePolicy.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         lastTradePrices.clear();
@@ -440,6 +444,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         outbox.clear();
         outboxBatchBuyLimitDirty = false;
         marketPrices.clear();
+        marketPricePolicy.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         invalidateMarketPriceContext();
@@ -639,12 +644,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void tickReadOnlyViews()
     {
-        marketPriceTicks++;
-        if (marketPriceTicks >= MARKET_PRICE_GAME_TICKS)
-        {
-            marketPriceTicks = 0;
-            requestMarketPrices(false);
-        }
+        // Check the actual per-item deadline each tick. A second minute-long
+        // timer could miss a cache expiry and postpone a refresh another minute.
+        requestMarketPrices(false);
 
         overviewTicks++;
         if (overviewTicks >= overviewRefreshGameTicks || overviewRefreshPending ||
@@ -3090,6 +3092,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         geItemPresence.clear();
         invalidateMarketPriceContext();
         marketPrices.clear();
+        marketPricePolicy.clear();
         marketPriceQueue.clear();
         queuedMarketPriceItems.clear();
         overview = RuneliteOverviewView.empty();
@@ -3994,6 +3997,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             if (!response.matchesFocusItem(requestFocusItemId))
                 throw new IllegalArgumentException("focusantwoord hoort bij een ander item");
             overview = response.toView(overview, requestFocusItemId);
+            for (MarketPriceView observation : response.marketPriceObservations())
+            {
+                MarketPriceView accepted = MarketPriceView.accept(
+                    marketPrices.get(observation.itemId), observation, marketPriceClock.getAsLong());
+                if (accepted != null) marketPrices.put(observation.itemId, accepted);
+            }
             if (requestFocusItemId == 0)
             {
                 // A server can refresh expired public resources in the
@@ -4910,26 +4919,29 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             if (snapshot != null && !"empty".equals(snapshot.status) && snapshot.itemId > 0)
             {
-                queueMarketPrice(snapshot.itemId, force || snapshot.suggestedSellPricePending);
+                queueMarketPrice(snapshot.itemId, force);
             }
         }
         if (focusedGeItemId > 0)
         {
             queueMarketPrice(focusedGeItemId, force);
         }
-        boolean cycleGuidanceChanged = false;
+        if (panel != null && focusedGeItemId <= 0)
+        {
+            for (Integer itemId : panel.activePriceListItems())
+            {
+                queueMarketPrice(itemId, force);
+            }
+        }
         for (Integer itemId : flipCycles.openItemIds())
         {
             if (itemId == null)
             {
                 continue;
             }
-            cycleGuidanceChanged |= refreshOpenFlipSellGuidance(itemId);
-            queueMarketPrice(itemId, force || flipCycles.needsSellTarget(itemId));
-        }
-        if (cycleGuidanceChanged)
-        {
-            persistCurrentAccount();
+            // A missing anchor is persistent state, not a new refresh intent.
+            // Cache deadlines still apply when the source has only one side.
+            queueMarketPrice(itemId, force);
         }
         flushMarketPriceQueue();
     }
@@ -4943,28 +4955,59 @@ public class OsrsFlipperSyncPlugin extends Plugin
             return;
         }
         MarketPriceView cached = marketPrices.get(itemId);
-        if (!force && cached != null && cached.fetchedAt + MARKET_PRICE_CACHE_SECONDS > now())
+        long interval = itemId == focusedGeItemId ? FOCUSED_PRICE_CACHE_SECONDS
+            : panel != null && panel.activePriceListItems().contains(itemId)
+                ? VISIBLE_PRICE_CACHE_SECONDS : MARKET_PRICE_CACHE_SECONDS;
+        if (!marketPricePolicy.due(itemId, cached, marketPriceClock.getAsLong(), interval, force))
         {
             return;
         }
+        if (queuedMarketPriceItems.contains(itemId))
+        {
+            if (itemId == focusedGeItemId)
+            {
+                marketPriceQueue.remove(itemId);
+                marketPriceQueue.addFirst(itemId);
+            }
+            return;
+        }
+        if (marketPriceQueue.size() >= MAX_QUEUED_MARKET_PRICES)
+        {
+            if (itemId != focusedGeItemId) return;
+            queuedMarketPriceItems.remove(marketPriceQueue.removeLast());
+        }
         if (queuedMarketPriceItems.add(itemId))
         {
-            marketPriceQueue.addLast(itemId);
+            if (itemId == focusedGeItemId) marketPriceQueue.addFirst(itemId);
+            else marketPriceQueue.addLast(itemId);
         }
     }
 
     private void flushMarketPriceQueue()
     {
-        if (!started || marketPriceInFlight)
+        if (!started || (client != null && client.getGameState() != GameState.LOGGED_IN))
         {
             return;
         }
+        long priceNow = marketPriceClock.getAsLong();
+        if (marketPriceInFlight)
+        {
+            if (marketPriceStartedAt > 0 && priceNow - marketPriceStartedAt >= 12)
+            {
+                int stalledItem = marketPriceInFlightItemId;
+                invalidateMarketPriceContext();
+                marketPricePolicy.failed(stalledItem, 0, priceNow, 0);
+            }
+            return;
+        }
+        if (!marketPricePolicy.sourceReady(priceNow)) return;
         Integer itemId = marketPriceQueue.pollFirst();
         if (itemId == null)
         {
             return;
         }
         queuedMarketPriceItems.remove(itemId);
+        if (!marketPricePolicy.itemReady(itemId, priceNow)) return;
 
         Request request = wikiMarketPriceRequest(itemId);
         if (request == null)
@@ -4983,9 +5026,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
             }
             generation = lifecycleGeneration;
             priceCall = httpClient.newCall(request);
+            priceCall.timeout().timeout(12, java.util.concurrent.TimeUnit.SECONDS);
             marketPriceCall = priceCall;
             marketPriceInFlight = true;
             marketPriceInFlightItemId = itemId;
+            marketPriceStartedAt = priceNow;
+            marketPricePolicy.started(itemId, priceNow);
         }
         priceCall.enqueue(new Callback()
         {
@@ -4995,6 +5041,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 clientThread.invokeLater(() -> finishMarketPriceRequest(
                     generation, priceGeneration, call, () ->
                 {
+                    marketPricePolicy.failed(itemId, 0, marketPriceClock.getAsLong(), 0);
                     debug("Actuele Wiki-prijs voor item {} kon niet worden opgehaald: {}", itemId, exception.getMessage());
                 }));
             }
@@ -5004,10 +5051,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 String body = readResponseBody(response);
                 int statusCode = response.code();
+                String retryAfter = response.header("Retry-After");
                 response.close();
                 clientThread.invokeLater(() -> finishMarketPriceRequest(
                     generation, priceGeneration, call,
-                    () -> handleMarketPriceResponse(itemId, statusCode, body)));
+                    () -> handleMarketPriceResponse(itemId, statusCode, body, retryAfter)));
             }
         });
     }
@@ -5019,6 +5067,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         marketPriceCall = null;
         marketPriceInFlight = false;
         marketPriceInFlightItemId = 0;
+        marketPriceStartedAt = 0;
         if (oldCall != null)
         {
             oldCall.cancel();
@@ -5067,6 +5116,12 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void handleMarketPriceResponse(int itemId, int statusCode, String body)
     {
+        handleMarketPriceResponse(itemId, statusCode, body, null);
+    }
+
+    private void handleMarketPriceResponse(int itemId, int statusCode, String body, String retryAfter)
+    {
+        long priceNow = marketPriceClock.getAsLong();
         if (statusCode >= 200 && statusCode < 300)
         {
             try
@@ -5075,15 +5130,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 LatestPriceData row = response == null || response.data == null
                     ? null
                     : response.data.get(Integer.toString(itemId));
-                if (row != null)
+                MarketPriceView market = row == null ? null : MarketPriceView.accept(marketPrices.get(itemId),
+                    new MarketPriceView(itemId, row.high, row.low, row.highTime, row.lowTime, priceNow), priceNow);
+                if (market != null)
                 {
-                    MarketPriceView market = new MarketPriceView(
-                        itemId,
-                        row.high,
-                        row.low,
-                        row.highTime,
-                        row.lowTime,
-                        now());
+                    marketPricePolicy.succeeded(itemId);
                     marketPrices.put(itemId, market);
                     capturePendingSellPrices(itemId, market);
                     if (refreshOpenFlipSellGuidance(itemId))
@@ -5092,6 +5143,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     }
                     refreshSidePanel();
                     refreshGeEditorSuggestions();
+                    return;
                 }
             }
             catch (RuntimeException exception)
@@ -5103,6 +5155,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
         {
             debug("Actuele Wiki-prijs voor item {} kreeg HTTP {}", itemId, statusCode);
         }
+        marketPricePolicy.failed(itemId, statusCode, priceNow,
+            MarketPriceRefreshPolicy.retryAfterSeconds(retryAfter, priceNow));
     }
 
     private void capturePendingSellPrices(int itemId, MarketPriceView market)

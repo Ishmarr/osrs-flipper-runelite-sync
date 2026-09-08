@@ -184,6 +184,8 @@ final class RuneliteOverviewView
         final long maximumProfitPerHour;
         final long maximumCycleProfit;
         final long priceUpdatedAt;
+        final long instantBuyAt;
+        final long instantSellAt;
         final int lowestSellPrice;
         final int officialBuyLimit;
         final int usedBuyLimit;
@@ -293,6 +295,21 @@ final class RuneliteOverviewView
             int usedBuyLimit, int remainingBuyLimit, QuantityCapacity quantityCapacity,
             String quantityReason)
         {
+            this(itemId, itemName, ranking, buyPrice, sellPrice, instantBuy, instantSell,
+                expectedQuantity, expectedProfit, maximumQuantity, maximumProfitPerHour,
+                maximumCycleProfit, priceUpdatedAt, lowestSellPrice, officialBuyLimit,
+                usedBuyLimit, remainingBuyLimit, quantityCapacity, quantityReason,
+                priceUpdatedAt, priceUpdatedAt);
+        }
+
+        Opportunity(
+            int itemId, String itemName, String ranking, int buyPrice, int sellPrice,
+            int instantBuy, int instantSell, int expectedQuantity, long expectedProfit,
+            int maximumQuantity, long maximumProfitPerHour, long maximumCycleProfit,
+            long priceUpdatedAt, int lowestSellPrice, int officialBuyLimit,
+            int usedBuyLimit, int remainingBuyLimit, QuantityCapacity quantityCapacity,
+            String quantityReason, long instantBuyAt, long instantSellAt)
+        {
             this.itemId = Math.max(0, itemId);
             this.itemName = itemName == null ? "" : itemName;
             this.ranking = ranking == null ? "" : ranking;
@@ -309,6 +326,8 @@ final class RuneliteOverviewView
             this.maximumProfitPerHour = Math.max(0, maximumProfitPerHour);
             this.maximumCycleProfit = Math.max(0, maximumCycleProfit);
             this.priceUpdatedAt = Math.max(0, priceUpdatedAt);
+            this.instantBuyAt = Math.max(0, instantBuyAt);
+            this.instantSellAt = Math.max(0, instantSellAt);
             this.lowestSellPrice = Math.max(0, lowestSellPrice);
             this.buyLimitAvailable = officialBuyLimit > 0 && usedBuyLimit >= 0;
             this.officialBuyLimit = this.buyLimitAvailable

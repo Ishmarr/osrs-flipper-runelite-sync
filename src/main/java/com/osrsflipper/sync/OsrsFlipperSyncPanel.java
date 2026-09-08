@@ -85,6 +85,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private final JTextField cashInput = new JTextField();
     private final LongConsumer saveCashAction;
     private final Timer displayTimer;
+    private final Map<JLabel, Long> priceCheckLabels = new LinkedHashMap<>();
+    private volatile boolean panelShowing;
+    private volatile String selectedTab = SLOTS;
+    private volatile List<Integer> visiblePriceItems = Collections.emptyList();
 
     private List<FlipperOfferView> offers = Collections.emptyList();
     private RuneliteOverviewView overview = RuneliteOverviewView.empty();
@@ -107,6 +111,10 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         super(false);
         this.itemManager = itemManager;
         this.saveCashAction = saveCashAction;
+        addHierarchyListener(event -> {
+            if ((event.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0)
+                panelShowing = isShowing();
+        });
         setLayout(new BorderLayout(0, 7));
         setBorder(new EmptyBorder(7, 6, 7, 6));
 
@@ -298,6 +306,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private void selectTab(String key)
     {
+        selectedTab = key;
         cardLayout.show(cards, key);
         for (Map.Entry<String, JButton> entry : tabButtons.entrySet())
         {
@@ -307,6 +316,13 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 ? ColorScheme.DARKER_GRAY_COLOR
                 : ColorScheme.DARK_GRAY_COLOR);
         }
+    }
+
+    boolean isPriceListActive() { return panelShowing && OPPORTUNITIES.equals(selectedTab); }
+
+    List<Integer> activePriceListItems()
+    {
+        return isPriceListActive() ? visiblePriceItems : Collections.emptyList();
     }
 
     private JPanel createOpportunitiesPage(Runnable refreshAction)
@@ -508,6 +524,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private void rebuildOpportunities()
     {
         opportunitiesList.removeAll();
+        priceCheckLabels.clear();
+        visiblePriceItems = Collections.emptyList();
         opportunityPricesUpdatedAt = 0;
         if (focusedItemId > 0)
         {
@@ -528,10 +546,17 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         else
         {
             List<RuneliteOverviewView.Opportunity> visible = visibleCycleOpportunities(overview.hourly, offers);
+            List<Integer> priceItems = new ArrayList<>();
+            for (RuneliteOverviewView.Opportunity item : visible)
+            {
+                if (priceItems.size() >= 5) break;
+                priceItems.add(item.itemId);
+            }
+            visiblePriceItems = Collections.unmodifiableList(priceItems);
             if (!overview.marketAvailable || overview.marketStale)
             {
                 String warningText = overview.marketAvailable
-                    ? "Marktprijzen zijn verouderd. Nieuwe prijzen worden opgehaald."
+                    ? "Marktoverzicht is verouderd. Itemprijzen kunnen recenter zijn; zie de prijscontrole."
                     : visible.isEmpty()
                         ? "Marktgegevens tijdelijk niet beschikbaar. Nieuwe gegevens worden opgehaald."
                         : "Marktgegevens tijdelijk niet beschikbaar. Je ziet de laatst opgehaalde flips.";
@@ -544,7 +569,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
                 visible,
                 emptyTopOpportunitiesMessage(visible));
             opportunityPricesUpdatedAt = overview.generatedAt;
-            opportunityPricesAgePrefix = "Marktprijzen: ";
+            opportunityPricesAgePrefix = "Overzicht: ";
         }
         if (opportunityPricesUpdatedAt > 0)
         {
@@ -665,6 +690,29 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         card.add(coloredMetric("Verkoop", priceOrDash(displayedSellPrice), GOLD, selling));
         card.add(coloredMetric("Wiki instabuy", priceOrDash(opportunity.instantBuy), BLUE, selling));
         card.add(coloredMetric("Wiki instasell", priceOrDash(opportunity.instantSell), BLUE, buying));
+        MarketPriceView checkedPrice = marketPrices.get(opportunity.itemId);
+        if (checkedPrice != null && checkedPrice.fetchedAt > 0)
+        {
+            JLabel checked = new JLabel("Prijscontrole: " + relativeAge(checkedPrice.fetchedAt, Instant.now().getEpochSecond()));
+            checked.setForeground(MUTED);
+            checked.setFont(checked.getFont().deriveFont(10f));
+            checked.setAlignmentX(Component.LEFT_ALIGNMENT);
+            checked.putClientProperty("priceTimePrefix", "Prijscontrole: ");
+            checked.setToolTipText("Laatste geslaagde controle bij de marktbron. Een controle betekent niet dat er een nieuwe transactie is.");
+            priceCheckLabels.put(checked, checkedPrice.fetchedAt);
+            card.add(checked);
+            long tradedAt = Math.max(opportunity.instantBuyAt, opportunity.instantSellAt);
+            if (tradedAt > 0)
+            {
+                JLabel traded = new JLabel("Nieuwste prijstransactie: " + relativeAge(tradedAt, Instant.now().getEpochSecond()));
+                traded.setForeground(MUTED);
+                traded.setFont(traded.getFont().deriveFont(10f));
+                traded.setAlignmentX(Component.LEFT_ALIGNMENT);
+                traded.putClientProperty("priceTimePrefix", "Nieuwste prijstransactie: ");
+                priceCheckLabels.put(traded, tradedAt);
+                card.add(traded);
+            }
+        }
         if (lastTrade != null && lastTrade.lastBuyPrice > 0)
         {
             card.add(coloredMetric("Last buy price", priceOrDash(lastTrade.lastBuyPrice), PURPLE, selling));
@@ -1046,6 +1094,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
 
     private void updateOpportunityPricesAge(long now)
     {
+        for (Map.Entry<JLabel, Long> checked : priceCheckLabels.entrySet())
+            checked.getKey().setText(checked.getKey().getClientProperty("priceTimePrefix") + relativeAge(checked.getValue(), now));
         if (opportunityPricesUpdatedAt > 0)
         {
             opportunityPricesAge.setText(opportunityPricesAgePrefix + relativeAge(opportunityPricesUpdatedAt, now));

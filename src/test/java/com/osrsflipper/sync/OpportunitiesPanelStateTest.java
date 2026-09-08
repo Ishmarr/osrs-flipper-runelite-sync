@@ -79,7 +79,7 @@ public class OpportunitiesPanelStateTest
             String text = renderText();
             assertTrue(text.contains("Persoonlijke flips worden opgehaald"));
             assertFalse(text.contains("Nog geen uitvoerbare flip"));
-            assertFalse(text.contains("Marktprijzen:"));
+            assertFalse(text.contains("Overzicht:"));
         });
     }
 
@@ -92,7 +92,7 @@ public class OpportunitiesPanelStateTest
             assertTrue(text.contains("Flips tijdelijk niet beschikbaar"));
             assertFalse(text.contains("Nog geen uitvoerbare flip"));
             assertFalse(text.contains("Geen vrije GP"));
-            assertFalse(text.contains("Marktprijzen:"));
+            assertFalse(text.contains("Overzicht:"));
         });
     }
 
@@ -122,10 +122,10 @@ public class OpportunitiesPanelStateTest
             true, true, true, 1_000_000));
         onEdt(() -> {
             String text = renderText();
-            assertTrue(text.contains("Marktprijzen zijn verouderd"));
+            assertTrue(text.contains("Marktoverzicht is verouderd"));
             assertTrue(text.contains("Wacht op actuele marktprijzen om uitvoerbare flips te bepalen"));
             assertFalse(text.contains("Nog geen uitvoerbare flip"));
-            assertTrue(text.contains("Marktprijzen:"));
+            assertTrue(text.contains("Overzicht:"));
             assertFalse(text.contains("Bijgewerkt"));
             Path output = Paths.get("build/reports/opportunities-stale-empty-panel.png");
             Files.createDirectories(output.getParent());
@@ -150,7 +150,7 @@ public class OpportunitiesPanelStateTest
         onEdt(() -> {
             String text = renderText();
             assertTrue(text.contains("Abyssal whip"));
-            assertTrue(text.contains("Marktprijzen zijn verouderd"));
+            assertTrue(text.contains("Marktoverzicht is verouderd"));
             assertFalse(text.contains("tijdelijk niet beschikbaar"));
             Path output = Paths.get("build/reports/opportunities-stale-panel.png");
             Files.createDirectories(output.getParent());
@@ -207,9 +207,9 @@ public class OpportunitiesPanelStateTest
         onEdt(() -> {
             Component[] before = opportunities().getComponents();
             tick(1060);
-            assertTrue(text(opportunities()).contains("Marktprijzen: 1 min geleden"));
+            assertTrue(text(opportunities()).contains("Overzicht: 1 min geleden"));
             tick(4600);
-            assertTrue(text(opportunities()).contains("Marktprijzen: 1 u geleden"));
+            assertTrue(text(opportunities()).contains("Overzicht: 1 u geleden"));
             assertArrayEquals(before, opportunities().getComponents());
         });
     }
@@ -223,7 +223,7 @@ public class OpportunitiesPanelStateTest
             tick(4600);
             String text = renderText();
             assertTrue(text.contains("Itemprijzen: 10 sec geleden"));
-            assertFalse(text.contains("Marktprijzen:"));
+            assertFalse(text.contains("Overzicht:"));
             assertFalse(text.contains("verouderd"));
             panel.updateFocusedItem(385, "buy", opportunity(385, "Anglerfish", 0));
         });

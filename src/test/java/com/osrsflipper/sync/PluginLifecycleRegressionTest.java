@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.client.callback.ClientThread;
@@ -202,14 +203,17 @@ public class PluginLifecycleRegressionTest
         final UiProbePlugin plugin = new UiProbePlugin();
         final Deque<Runnable> callbacks = new ArrayDeque<>();
         final List<TestCall> calls = new ArrayList<>();
+        long clock = java.time.Instant.now().getEpochSecond();
 
         Harness() throws Exception
         {
             set(plugin, "gson", new Gson());
+            set(plugin, "marketPriceClock", (java.util.function.LongSupplier) () -> clock);
             set(plugin, "config", new OsrsFlipperSyncConfig() {});
             set(plugin, "client", Proxy.newProxyInstance(Client.class.getClassLoader(),
                 new Class<?>[]{Client.class}, (proxy, method, arguments) ->
                 {
+                    if ("getGameState".equals(method.getName())) return GameState.LOGGED_IN;
                     if (method.getReturnType() == boolean.class) return false;
                     if (method.getReturnType() == int.class) return 0;
                     if (method.getReturnType() == long.class) return -1L;
@@ -233,6 +237,7 @@ public class PluginLifecycleRegressionTest
 
         TestCall fetch(int itemId) throws Exception
         {
+            clock++;
             invoke(plugin, "queueMarketPrice", new Class<?>[]{int.class, boolean.class}, itemId, true);
             invoke(plugin, "flushMarketPriceQueue");
             return calls.get(calls.size() - 1);

@@ -195,6 +195,18 @@ final class WorkerOverviewResponse
         }
         return result;
     }
+    List<MarketPriceView> marketPriceObservations()
+    {
+        List<MarketPriceView> result = new ArrayList<>();
+        if (opportunities == null) return result;
+        if (opportunities.expected != null)
+            for (OpportunityData row : opportunities.expected) if (row != null) result.add(row.priceView());
+        if (opportunities.hourly != null)
+            for (OpportunityData row : opportunities.hourly) if (row != null) result.add(row.priceView());
+        if (opportunities.focus != null) result.add(opportunities.focus.priceView());
+        return result;
+    }
+
     private static final class OpportunityLists
     {
         List<OpportunityData> expected;
@@ -220,7 +232,17 @@ final class WorkerOverviewResponse
         long maximum_profit_per_hour;
         long maximum_cycle_profit;
         long price_updated_at;
+        Long instant_buy_at;
+        Long instant_sell_at;
         QuantityCapacityData quantity_capacity;
+
+        MarketPriceView priceView()
+        {
+            return new MarketPriceView(item_id, instant_buy, instant_sell,
+                instant_buy_at == null ? price_updated_at : instant_buy_at,
+                instant_sell_at == null ? price_updated_at : instant_sell_at, 0,
+                instant_buy_at != null, instant_sell_at != null);
+        }
 
         RuneliteOverviewView.Opportunity toView()
         {
@@ -243,7 +265,8 @@ final class WorkerOverviewResponse
                 used_buy_limit,
                 remaining_buy_limit,
                 quantity_capacity == null ? null : quantity_capacity.toView(),
-                "");
+                "", instant_buy_at == null ? price_updated_at : instant_buy_at,
+                instant_sell_at == null ? price_updated_at : instant_sell_at);
         }
     }
 
