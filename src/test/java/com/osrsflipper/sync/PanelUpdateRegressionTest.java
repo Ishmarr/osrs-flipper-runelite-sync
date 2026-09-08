@@ -53,8 +53,8 @@ public class PanelUpdateRegressionTest
         set(plugin, "overview", next);
         addOfferSnapshot(plugin);
         LastTradePriceBook prices = (LastTradePriceBook) get(plugin, "lastTradePrices");
-        prices.recordTransition(202, "buy", 0, 0, 1, 80, 1, "completed", 80, 10);
-        prices.recordTransition(202, "sell", 0, 0, 1, 140, 1, "completed", 140, 11);
+        prices.recordTransition(202, "buy", 0, 0, 1, 180, 1, "completed", 180, 10);
+        prices.recordTransition(202, "sell", 0, 0, 1, 90, 1, "completed", 90, 11);
         SyncHealthTracker health = (SyncHealthTracker) get(plugin, "syncHealth");
         health.fail(SyncHealthTracker.Channel.OVERVIEW, "netwerkfout", 1000);
         String expectedHealth = health.banner(0);
@@ -81,7 +81,7 @@ public class PanelUpdateRegressionTest
                 {
                     assertSame(next, state.overview);
                     assertEquals(0, state.focusedItemId);
-                    assertEquals(80, state.lastBuyPrice);
+                    assertEquals(180, state.lastBuyPrice);
                     assertEquals(expectedHealth, state.healthText);
                 }
             }
@@ -102,10 +102,10 @@ public class PanelUpdateRegressionTest
     public void queuedModelCopiesMutableSourcesAndPreservesFocusAndMarketState() throws Exception
     {
         List<FlipperOfferView> offers = new ArrayList<>(Arrays.asList(offer(2, 102), offer(1, 101)));
-        LastTradePriceView price = new LastTradePriceView(202, 80, 140, 10, 11);
+        LastTradePriceView price = new LastTradePriceView(202, 180, 90, 10, 11);
         Map<Integer, LastTradePriceView> prices = new LinkedHashMap<>();
         prices.put(202, price);
-        RuneliteOverviewView overview = overview(202, 1000, true);
+        RuneliteOverviewView overview = overview(202, 1_000_000, true);
         RuneliteOverviewView.Opportunity focused = overview.hourly.get(0);
         MarketPriceView market = new MarketPriceView(202, 151, 99, 10, 11, 12);
         Map<Integer, MarketPriceView> markets = new LinkedHashMap<>();
@@ -206,7 +206,8 @@ public class PanelUpdateRegressionTest
     private static RuneliteOverviewView overview(int id, long cash, boolean unavailable)
     {
         RuneliteOverviewView.Opportunity opportunity = new RuneliteOverviewView.Opportunity(
-            id, "Item " + id, "cycle_profit", 100, 150, 151, 99, 10, 470, 10, 470, 470, 1000);
+            id, "Item " + id, "cycle_profit", 100, 150, 151, 99, 0, 0, 5000, 117500, 235000, 1000,
+            0, 5000, 0, 5000, new QuantityCapacity(cash, 5000, 5000, 1000), "");
         RuneliteOverviewView.PeriodStats stats = new RuneliteOverviewView.PeriodStats(42, 1, 2, 3, 4, 5);
         return new RuneliteOverviewView(Collections.emptyList(), Collections.singletonList(opportunity), null,
             stats, stats, stats, Collections.emptyList(), new RuneliteOverviewView.CashBalance(cash, 0, cash, 1000),

@@ -110,9 +110,6 @@ public class OverviewListContinuityTest
                 assertEquals("Repricing must reuse the in-flight overview and fetched capacity", requestsBeforeTest, h.calls.size());
                 int expected = profitable ? 4500 : 0;
                 assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
-                String updated = h.renderedPanelText();
-                assertTrue(updated, updated.contains("Aantal\n" + (profitable ? "4 500" : "0") + "\n"));
-                if (!profitable) assertTrue(updated, updated.contains("Geen winst na GE-tax"));
                 assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
 
                 // An older authoritative price pair cannot replace the 1x1 pair
@@ -134,17 +131,15 @@ public class OverviewListContinuityTest
                     expected = 2;
                     assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
                 }
-                String late = h.renderedPanelText();
-                assertTrue(late, late.contains("Aantal\n" + expected + "\n"));
                 assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
                 int completedRequests = h.calls.size();
                 h.focus(451);
                 invoke(h.plugin, "refreshSidePanel");
                 assertTrue(h.renderedPanelText().contains("Aantal\n" + expected + "\n"));
+                if (!profitable) assertTrue(h.renderedPanelText().contains("Geen winst na GE-tax"));
                 assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
                 h.closeFocus();
                 assertEquals(ids, h.ids());
-                assertTrue(h.renderedPanelText().contains("Aantal\n" + expected + "\n"));
                 assertRuniteAdvice(h, expected, profitable ? 10399 : 9815);
                 assertEquals("Selecting and closing must not fetch another capacity snapshot", completedRequests, h.calls.size());
             }
@@ -157,9 +152,16 @@ public class OverviewListContinuityTest
         assertEquals(9764, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
         assertEquals(sellPrice, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
         String text = h.renderedPanelText();
+        long profit = GeTax.calculateProfitPerItem(9764, sellPrice, 451);
+        if (h.focusedItem <= 0 && profit * quantity < 100_000)
+        {
+            assertFalse("An unexecutable or below-threshold flip must leave the normal top", text.contains("Runite ore"));
+            return;
+        }
+        assertTrue(text, text.contains("Runite ore"));
+        assertTrue(text, text.contains("Aantal\n" + String.format(java.util.Locale.US, "%,d", quantity).replace(',', ' ') + "\n"));
         assertTrue(text, text.contains("Koop\n9 764 gp\n"));
         assertTrue(text, text.contains("Verkoop\n" + String.format(java.util.Locale.US, "%,d gp", sellPrice).replace(',', ' ') + "\n"));
-        long profit = GeTax.calculateProfitPerItem(9764, sellPrice, 451);
         String perItem = (profit >= 0 ? "+" : "") + String.format(java.util.Locale.US, "%,d GP", profit).replace(',', ' ');
         assertTrue(text, text.contains("Winst/item\n" + perItem + "\n"));
         String cycle = String.format(java.util.Locale.US, "%,d GP", profit * quantity).replace(',', ' ');
@@ -181,6 +183,11 @@ public class OverviewListContinuityTest
             ore.addProperty("sell_price", 199);
             ore.addProperty("instant_buy", 200);
             ore.addProperty("instant_sell", 150);
+            ore.addProperty("maximum_quantity", 5000);
+            ore.addProperty("official_buy_limit", 5000);
+            ore.addProperty("remaining_buy_limit", 5000);
+            ore.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
+                "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
             h.requestFull(true).respond(GSON.toJson(response));
             h.drain();
             assertEquals("Legacy payloads retain the conservative aggregate timestamp", 199,
@@ -330,16 +337,24 @@ public class OverviewListContinuityTest
                 assertEquals(997, h.view().opportunityForItem(451).usedBuyLimit);
                 for (int view = 0; view < 3; view++)
                 {
-                    if (view == 1) h.focus(451);
+                    if (view == 1)
+                    {
+                        h.focus(451);
+                        invoke(h.plugin, "refreshSidePanel");
+                    }
                     if (view == 2) h.closeFocus();
                     assertEquals(101, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "buy"));
                     assertEquals(249, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 451, "sell"));
                     assertEquals(2, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
                     String text = h.renderedPanelText();
-                    assertTrue(text, text.contains("Aantal\n2\n"));
-                    assertTrue(text, text.contains("Koop\n101 gp\n"));
-                    assertTrue(text, text.contains("Verkoop\n249 gp\n"));
-                    assertTrue(text, text.contains("Limiet gebruikt\n997 / 1 000\n"));
+                    if (view == 1)
+                    {
+                        assertTrue(text, text.contains("Aantal\n2\n"));
+                        assertTrue(text, text.contains("Koop\n101 gp\n"));
+                        assertTrue(text, text.contains("Verkoop\n249 gp\n"));
+                        assertTrue(text, text.contains("Limiet gebruikt\n997 / 1 000\n"));
+                    }
+                    else assertFalse("Cash-limited advice below 100k belongs only in selection", text.contains("Fixture item 451"));
                     assertFalse("Overview receipt is not a direct Wiki check", text.contains("Prijscontrole:"));
                 }
                 assertEquals(2, h.calls.size());
@@ -362,6 +377,9 @@ public class OverviewListContinuityTest
             ore.addProperty("sell_price", 199);
             ore.addProperty("instant_buy", 200);
             ore.addProperty("instant_sell", 150);
+            ore.addProperty("maximum_quantity", 5000);
+            ore.addProperty("official_buy_limit", 5000);
+            ore.addProperty("remaining_buy_limit", 5000);
             ore.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
                 "\"buy_volume_per_hour\":5000,\"sell_volume_per_hour\":5000,\"guide_price\":20000}", JsonObject.class));
             h.requestFull(true).respond(GSON.toJson(response));
@@ -404,10 +422,104 @@ public class OverviewListContinuityTest
                 int expected = high == 10400 ? 0 : 1000;
                 assertEquals(expected, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 451));
                 String text = h.renderedPanelText();
-                assertTrue(text, text.contains("Aantal\n" + (expected == 0 ? "0" : "1 000") + "\n"));
-                assertTrue(text, text.contains("Koop\n10 301 gp\n"));
+                if (expected == 0) assertFalse(text, text.contains("Fixture item 451"));
+                else
+                {
+                    assertTrue(text, text.contains("Aantal\n1 000\n"));
+                    assertTrue(text, text.contains("Koop\n10 301 gp\n"));
+                }
+                h.focus(451);
+                invoke(h.plugin, "refreshSidePanel");
+                String selected = h.renderedPanelText();
+                assertTrue(selected, selected.contains("Aantal\n" + (expected == 0 ? "0" : "1 000") + "\n"));
+                assertTrue(selected, selected.contains("Koop\n10 301 gp\n"));
+                if (expected == 0) assertTrue(selected, selected.contains("Geen winst na GE-tax"));
+                h.closeFocus();
                 assertEquals("Wiki callback reprices the existing model without requesting another overview", 1, h.calls.size());
             }
+        }
+    }
+
+    @Test
+    public void actualWikiCallbackRemovesLossFromTopAndRecoversWithoutAnotherWorkerRequest() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.attachPanel();
+            h.enableGameTicks();
+            java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong(NOW);
+            set(h.plugin, "marketPriceClock", (java.util.function.LongSupplier) clock::get);
+            JsonObject response = GSON.fromJson(payload(Arrays.asList(2970), 0, NOW - 60,
+                false, true, 100_000_000), JsonObject.class);
+            JsonObject fungus = response.getAsJsonObject("opportunities").getAsJsonArray("hourly").get(0).getAsJsonObject();
+            fungus.addProperty("item_name", "Mort myre fungus");
+            fungus.addProperty("buy_price", 151);
+            fungus.addProperty("sell_price", 199);
+            fungus.addProperty("instant_buy", 200);
+            fungus.addProperty("instant_sell", 150);
+            fungus.addProperty("maximum_quantity", 13000);
+            fungus.addProperty("official_buy_limit", 13000);
+            fungus.addProperty("remaining_buy_limit", 13000);
+            fungus.add("quantity_capacity", GSON.fromJson("{\"cash_available\":100000000," +
+                "\"buy_volume_per_hour\":13000,\"sell_volume_per_hour\":13000,\"guide_price\":1000}", JsonObject.class));
+            h.requestFull(true).respond(GSON.toJson(response));
+            h.drain();
+            assertTrue(h.renderedPanelText().contains("Mort myre fungus"));
+            set(h.panel, "panelShowing", true);
+            TestCall delayed = h.requestFull(true);
+
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            TestCall loss = h.calls.get(h.calls.size() - 1);
+            assertEquals("prices.runescape.wiki", loss.request.url().host());
+            assertEquals("2970", loss.request.url().queryParameter("id"));
+            loss.respond("{\"data\":{\"2970\":{\"high\":192,\"low\":191," +
+                "\"highTime\":" + NOW + ",\"lowTime\":" + NOW + "}}}");
+            h.drain();
+            assertEquals(0, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 2970));
+            String top = h.renderedPanelText();
+            assertFalse(top, top.contains("Mort myre fungus"));
+            assertTrue(top, top.contains("Nog geen uitvoerbare flip"));
+            assertFalse("A price rejection must not be reported as an occupied GE slot", top.contains("staan al in je GE-slots"));
+            assertEquals("A hidden candidate must retain a bounded recovery price check",
+                Arrays.asList(2970), h.panel.activePriceListItems());
+
+            delayed.respond(GSON.toJson(response));
+            h.drain();
+            assertFalse("An older overview cannot restore an obsolete profitable card",
+                h.renderedPanelText().contains("Mort myre fungus"));
+            h.focus(2970);
+            invoke(h.plugin, "refreshSidePanel");
+            String selected = h.renderedPanelText();
+            assertTrue(selected, selected.contains("Geselecteerde flip"));
+            assertTrue(selected, selected.contains("Mort myre fungus"));
+            assertTrue(selected, selected.contains("Aantal\n0\n"));
+            assertTrue(selected, selected.contains("Geen winst na GE-tax"));
+            assertTrue(selected, selected.contains("Koop\n192 gp\n"));
+            assertTrue(selected, selected.contains("Verkoop\n191 gp\n"));
+            assertTrue(selected, selected.contains("Winst/item\n-4 GP\n"));
+            assertEquals(192, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 2970, "buy"));
+            assertEquals(191, invoke(h.plugin, "gePriceEditorPrice", new Class<?>[]{int.class, String.class}, 2970, "sell"));
+            h.closeFocus();
+            assertFalse(h.renderedPanelText().contains("Mort myre fungus"));
+
+            clock.set(NOW + 14);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            assertEquals("Rejecting a card cannot create extra or immediate price requests", 3, h.calls.size());
+            clock.set(NOW + 15);
+            invoke(h.plugin, "requestMarketPrices", new Class<?>[]{boolean.class}, false);
+            assertEquals(4, h.calls.size());
+            TestCall recovered = h.calls.get(3);
+            assertEquals("prices.runescape.wiki", recovered.request.url().host());
+            recovered.respond("{\"data\":{\"2970\":{\"high\":221,\"low\":191," +
+                "\"highTime\":" + (NOW + 15) + ",\"lowTime\":" + (NOW + 15) + "}}}");
+            h.drain();
+            String restored = h.renderedPanelText();
+            assertTrue(restored, restored.contains("Mort myre fungus"));
+            assertTrue(restored, restored.contains("#1"));
+            assertTrue(restored, restored.contains("Aantal\n13 000\n"));
+            assertTrue(restored, restored.contains("312 000 GP"));
+            assertEquals(13000, invoke(h.plugin, "currentGeQuantity", new Class<?>[]{int.class}, 2970));
+            assertEquals("Removal, selection and recovery reuse the two existing overviews", 2, h.workerCalls().size());
         }
     }
 
@@ -1214,7 +1326,7 @@ public class OverviewListContinuityTest
         try (Harness h = harness())
         {
             h.attachPanel();
-            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW - 60, false, true, 1000));
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW - 60, false, true, 1_000_000));
             h.drain();
             h.requestFull(true).fail();
             h.drain();
@@ -1229,7 +1341,7 @@ public class OverviewListContinuityTest
             h.enableGameTicks();
             h.ticks(1);
             assertEquals(3, h.overviewCalls().size());
-            h.overviewCalls().get(2).respond(payload(TOP_IDS, 0, NOW, false, true, 1000));
+            h.overviewCalls().get(2).respond(payload(TOP_IDS, 0, NOW, false, true, 1_000_000));
             h.drain();
             assertTrue(h.view().marketAvailable);
             assertFalse(h.view().marketStale);
@@ -1384,11 +1496,11 @@ public class OverviewListContinuityTest
         try (Harness h = harness())
         {
             h.attachPanel();
-            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW - 60, false, true, 1000));
+            h.requestFull(true).respond(payload(TOP_IDS, 0, NOW - 60, false, true, 1_000_000));
             h.drain();
             assertFiveCards(h.renderedPanelText());
             h.focus(FOCUS);
-            h.requestFocus(FOCUS).respond(payload(new ArrayList<>(), FOCUS, NOW, false, true, 1000));
+            h.requestFocus(FOCUS).respond(payload(new ArrayList<>(), FOCUS, NOW, false, true, 1_000_000));
             h.drain();
             String focused = h.renderedPanelText();
             assertTrue(focused.contains("Geselecteerde flip"));
@@ -1622,9 +1734,9 @@ public class OverviewListContinuityTest
                     assertFalse("Later trades cannot preempt a read while the earlier trade is backing off", read.cancelled);
                     invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
                 }
-                read.respond(payload(TOP_IDS, 0, NOW + attempt, false, true, 1000 + attempt));
+                read.respond(payload(TOP_IDS, 0, NOW + attempt, false, true, 1_000_000 + attempt));
                 h.drain();
-                assertEquals(1000 + attempt, h.view().cash.available);
+                assertEquals(1_000_000 + attempt, h.view().cash.available);
                 assertTrue(h.health().failed(SyncHealthTracker.Channel.EVENTS));
                 assertTrue(h.renderedPanelText().contains("Fixture item 1001"));
                 int count = h.workerCalls().size();
@@ -1752,14 +1864,17 @@ public class OverviewListContinuityTest
         {
             h.enableGameTicks();
             enqueueSale(h, 4);
-            String original = requestBody(h.calls.get(0));
+            TestCall delivery = h.workerCalls().get(0);
+            assertEquals("POST", delivery.request.method());
+            assertEquals("/runelite-api/ge-slots/sync", delivery.request.url().encodedPath());
+            String original = requestBody(delivery);
             String eventId = GSON.fromJson(original, JsonObject.class).getAsJsonObject("event").get("event_id").getAsString();
             String processing = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\",\"event_id\":\"" +
                 eventId + "\",\"retry_after_ms\":250}";
             for (int phase = 1; phase <= 17; phase++)
             {
                 long responseAt = Instant.now().getEpochSecond();
-                h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
+                delivery.respond(202, processing);
                 h.drain();
                 if (phase > 16)
                 {
@@ -1801,9 +1916,17 @@ public class OverviewListContinuityTest
                 assertEquals(count, h.workerCalls().size());
                 set(head, "nextAttemptAt", 0L);
                 invoke(h.plugin, "pumpWorkerRequests");
-                assertEquals(original, requestBody(h.calls.get(h.calls.size() - 1)));
+                // Wiki GETs run independently of the serialized Worker queue.
+                // Identify the newly dispatched retry, rather than assuming
+                // that the last request to any host carries a financial body.
+                assertEquals("One explicit deadline expiry dispatches one Worker retry in phase " + phase,
+                    count + 1, h.workerCalls().size());
+                delivery = h.workerCalls().get(count);
+                assertEquals("POST", delivery.request.method());
+                assertEquals("/runelite-api/ge-slots/sync", delivery.request.url().encodedPath());
+                assertEquals(original, requestBody(delivery));
             }
-            h.calls.get(h.calls.size() - 1).respond(eventAck(eventId, "applied"));
+            delivery.respond(eventAck(eventId, "applied"));
             h.drain();
             assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
             assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
@@ -2131,7 +2254,7 @@ public class OverviewListContinuityTest
     private static String pricedPayload(int refreshSeconds, long snapshotAt, long transactionAt,
         boolean stale, int buyPrice, int sellPrice)
     {
-        JsonObject response = GSON.fromJson(payload(TOP_IDS, 0, snapshotAt, stale, true, 1_000_000), JsonObject.class);
+        JsonObject response = GSON.fromJson(payload(TOP_IDS, 0, snapshotAt, stale, true, 100_000_000), JsonObject.class);
         response.addProperty("refresh_after_seconds", refreshSeconds);
         response.getAsJsonObject("market_refresh").addProperty("upstream_cache_hit", true);
         for (com.google.gson.JsonElement entry : response.getAsJsonObject("opportunities").getAsJsonArray("hourly"))

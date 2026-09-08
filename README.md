@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.40
+# OSRS Flipper Sync v5.2.41
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.41 — Top flipwaarde volgt de actuele uitvoerbaarheid
+
+- De toplijst herberekent eerst prijzen, aantal en winst met dezelfde resolver als de selectie en GE-invoerhulp. Daarna blijven alleen uitvoerbare flips met minstens 100.000 GP totale winst na GE-tax over, gesorteerd op hun actuele flipwaarde en begrensd op vijf kaarten. Een verliesgevende of niet meer betaalbare flip behoudt zijn oude rang niet.
+- Een geselecteerd item blijft zijn prijzen, aantal nul en reden tonen. De onderliggende kandidaten blijven beschikbaar voor selectie en herstel; lege plaatsen in de bestaande prijscontrolelijst worden met afgewezen kandidaten aangevuld, met nog steeds maximaal vijf items en zonder extra Worker-aanvragen.
+- Regressies controleren prijs- en cashwijzigingen, de winstgrens, rangschikking, een 1×1-prijstest tijdens een vertraagd overviewantwoord, selectie/sluiten en terugkeer na een nieuwe winstgevende quote. Tests gebruiken uitsluitend het geïsoleerde RuneLite-profiel. Cloudflare blijft Free; geen Plugin Hub-publicatie.
 
 ## 5.2.40 — Gerichte prijscontroles zonder extra cachevertraging
 

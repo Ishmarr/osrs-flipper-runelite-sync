@@ -56,6 +56,8 @@ public class OsrsFlipperSyncPanel extends PluginPanel
     private static final int ACTIVE_PRICE_ROW_HEIGHT = 31;
     private static final int SLOT_TIMER_ROW_HEIGHT = 29;
     private static final int COINS_ITEM_ID = 995;
+    private static final long MINIMUM_CYCLE_PROFIT = 100_000;
+    private static final int TOP_OPPORTUNITY_LIMIT = 5;
     private static final String SLOTS = "slots";
     private static final String OPPORTUNITIES = "opportunities";
     private static final String STATS = "stats";
@@ -545,12 +547,22 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         }
         else
         {
-            List<RuneliteOverviewView.Opportunity> visible = visibleCycleOpportunities(overview.hourly, offers);
+            List<RuneliteOverviewView.Opportunity> candidates = visibleCycleOpportunities(overview.hourly, offers);
+            List<RuneliteOverviewView.Opportunity> visible = rankedCycleOpportunities(
+                candidates, marketPrices, lastTradePrices,
+                overview.cash.updatedAt > 0 || overview.cash.version >= 0 ? overview.cash.available : null);
             List<Integer> priceItems = new ArrayList<>();
             for (RuneliteOverviewView.Opportunity item : visible)
             {
-                if (priceItems.size() >= 5) break;
                 priceItems.add(item.itemId);
+            }
+            // Keep checking rejected candidates when there is room. An empty
+            // recommendation list must still recover from a later Wiki quote,
+            // within the existing five-item polling budget.
+            for (RuneliteOverviewView.Opportunity item : candidates)
+            {
+                if (priceItems.size() >= TOP_OPPORTUNITY_LIMIT) break;
+                if (!priceItems.contains(item.itemId)) priceItems.add(item.itemId);
             }
             visiblePriceItems = Collections.unmodifiableList(priceItems);
             if (!overview.marketAvailable || overview.marketStale)
@@ -567,7 +579,7 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             addOpportunitySection(
                 "Top flipwaarde",
                 visible,
-                emptyTopOpportunitiesMessage(visible));
+                emptyTopOpportunitiesMessage(candidates));
             opportunityPricesUpdatedAt = overview.generatedAt;
             opportunityPricesAgePrefix = "Overzicht: ";
         }
@@ -580,9 +592,9 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         opportunitiesList.repaint();
     }
 
-    private String emptyTopOpportunitiesMessage(List<RuneliteOverviewView.Opportunity> visible)
+    private String emptyTopOpportunitiesMessage(List<RuneliteOverviewView.Opportunity> candidates)
     {
-        if (!overview.hourly.isEmpty() && visible.isEmpty())
+        if (!overview.hourly.isEmpty() && candidates.isEmpty())
         {
             return "Alle gevonden flips staan al in je GE-slots.";
         }
@@ -629,19 +641,6 @@ public class OsrsFlipperSyncPanel extends PluginPanel
         RuneliteOverviewView.Opportunity opportunity,
         int rank)
     {
-        if (focusedItemId <= 0)
-        {
-            // A local 1x1 test or Wiki reply can change the executable quantity
-            // before the next overview. Use the same resolver as the GE editor;
-            // replacing only the displayed prices leaves the old size behind.
-            RuneliteOverviewView.Opportunity resolved = SelectedGeOpportunityResolver.resolve(
-                FocusedGeItemResolver.EditorContext.NEW_SETUP,
-                opportunity.itemId, opportunity.itemName, "buy", opportunity,
-                marketPrices.get(opportunity.itemId), lastTradePrices.get(opportunity.itemId),
-                null, null, overview.cash.updatedAt > 0 || overview.cash.version >= 0
-                    ? overview.cash.available : null).opportunity;
-            if (resolved != null) opportunity = resolved;
-        }
         JPanel card = cardPanel();
         JPanel header = itemHeader(opportunity.itemId, opportunity.itemName);
         JLabel rankLabel = new JLabel("#" + rank);
@@ -918,17 +917,48 @@ public class OsrsFlipperSyncPanel extends PluginPanel
             }
         }
         List<RuneliteOverviewView.Opportunity> visible = new ArrayList<>();
+        Set<Integer> seenItemIds = new HashSet<>();
         if (opportunities != null)
         {
             for (RuneliteOverviewView.Opportunity opportunity : opportunities)
             {
-                if (opportunity != null && !activeItemIds.contains(opportunity.itemId))
+                if (opportunity != null && opportunity.itemId > 0 &&
+                    !activeItemIds.contains(opportunity.itemId) && seenItemIds.add(opportunity.itemId))
                 {
                     visible.add(opportunity);
                 }
             }
         }
         return visible;
+    }
+
+    static List<RuneliteOverviewView.Opportunity> rankedCycleOpportunities(
+        List<RuneliteOverviewView.Opportunity> candidates,
+        Map<Integer, MarketPriceView> markets,
+        Map<Integer, LastTradePriceView> priceTests,
+        Long currentCash)
+    {
+        List<RuneliteOverviewView.Opportunity> ranked = new ArrayList<>();
+        for (RuneliteOverviewView.Opportunity candidate : candidates)
+        {
+            // Resolve before filtering and ranking: live prices, local 1x1 tests
+            // and cash changes can invalidate the original scanner ranking.
+            // The selected GE card intentionally remains outside this filter.
+            RuneliteOverviewView.Opportunity resolved = SelectedGeOpportunityResolver.resolve(
+                FocusedGeItemResolver.EditorContext.NEW_SETUP,
+                candidate.itemId, candidate.itemName, "buy", candidate,
+                markets.get(candidate.itemId), priceTests.get(candidate.itemId),
+                null, null, currentCash).opportunity;
+            if (resolved != null && resolved.hasQuantity() && resolved.effectiveMaximumQuantity() > 0 &&
+                resolved.buyPrice > 0 && resolved.sellPrice > 0 &&
+                displayedCycleProfit(resolved, resolved.buyPrice, resolved.sellPrice) >= MINIMUM_CYCLE_PROFIT)
+            {
+                ranked.add(resolved);
+            }
+        }
+        ranked.sort(Comparator.comparingLong((RuneliteOverviewView.Opportunity item) ->
+            displayedCycleProfit(item, item.buyPrice, item.sellPrice)).reversed());
+        return new ArrayList<>(ranked.subList(0, Math.min(TOP_OPPORTUNITY_LIMIT, ranked.size())));
     }
 
     private void rebuildStats()

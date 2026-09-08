@@ -298,7 +298,7 @@ public class OpportunitiesPanelStateTest
     private static RuneliteOverviewView.Opportunity opportunity(int id, String name, long timestamp)
     {
         return new RuneliteOverviewView.Opportunity(id, name, "cycle_profit",
-            100, 130, 131, 99, 100, 2500, 100, 5000, 2500, timestamp);
+            100, 130, 131, 99, 0, 0, 5000, 70_000, 140_000, timestamp);
     }
 
     private static void layout(Container container)

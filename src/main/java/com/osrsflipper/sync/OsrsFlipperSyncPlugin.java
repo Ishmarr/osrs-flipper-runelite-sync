@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.40";
+    private static final String PLUGIN_VERSION = "5.2.41";
     private static final int MAX_EVENT_CONTINUATIONS = 16;
     private static final int MAX_SNAPSHOT_CONTINUATIONS = 8 * 32;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
