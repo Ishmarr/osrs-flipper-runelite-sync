@@ -84,9 +84,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.37";
+    private static final String PLUGIN_VERSION = "5.2.38";
     private static final int MAX_EVENT_CONTINUATIONS = 16;
-    private static final int MAX_SNAPSHOT_CONTINUATIONS = 96;
+    private static final int MAX_SNAPSHOT_CONTINUATIONS = 8 * 32;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -2138,9 +2138,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // Een grote inhaalsnapshot wordt door de Worker bewust in kleine,
             // CPU-veilige delen verwerkt. Dit is voortgang, geen storing: houd
             // hetzelfde durable ID vast en vraag de volgende tranche snel op.
-            // Eight new purchases currently take 72 bounded requests. Allow
-            // those phases plus recovery headroom; beyond the fixed budget,
-            // use ordinary failure delays and permit reads without losing intent.
+            // Eight abandoned purchases followed by eight replacement offers
+            // currently take 192 requests. Eight slots times 32 allows margin;
+            // beyond that fixed budget, ordinary backoff still permits reads.
             pendingSnapshot.nextAttemptAt = now() + continuationDelay;
             snapshotPending = true;
             persistCurrentAccount();

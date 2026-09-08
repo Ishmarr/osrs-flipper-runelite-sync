@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.37
+# OSRS Flipper Sync v5.2.38
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.38 — Inhaalsnapshots met achtergelaten offers
+
+- Volledige snapshots krijgen maximaal 256 snelle vervolgaanvragen: acht slots maal 32 stappen. Dit geeft marge boven de gemeten 192 aanvragen voor acht achtergelaten aankopen gevolgd door acht nieuwe offers; het is geen absolute bovengrens op alle mogelijke herstelwerk.
+- Na de vaste grens blijft gewone backoff actief en kunnen gezonde leesroutes blijven werken. Het snapshotbudget en de deadline blijven bij herstarts bewaard. GE-events behouden hun limiet van 16 snelle vervolgaanvragen.
+- Callbackregressies controleren 72 en 192 aanvragen zonder kunstmatige foutpauzes, plus blijvend onvoltooide verwerking na 256 continuaties. Een echte Worker-regressie controleert de cash en offers voor het gecombineerde inhaalpad.
 
 ## 5.2.37 — Snelle voortgang voor de volledige herstelketen
 
