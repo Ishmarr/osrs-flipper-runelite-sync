@@ -1,6 +1,12 @@
-# OSRS Flipper Sync v5.2.36
+# OSRS Flipper Sync v5.2.37
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.37 — Snelle voortgang voor de volledige herstelketen
+
+- GE-gebeurtenissen krijgen maximaal 16 snelle vervolgaanvragen en volledige snapshots maximaal 96. Dit omvat de huidige negen tot tien aanvragen per nieuwe aankoop en 72 aanvragen voor acht nieuwe aankopen, zonder tussentijdse minutenlange foutpauzes.
+- Na de vaste grens volgt gewone backoff en blijven gezonde leesroutes beschikbaar. Retrybudgetten en deadlines blijven bij herstarts bewaard, gebonden aan dezelfde onveranderlijke gebeurtenis en account.
+- Regressies testen de volledige voortgang via echte callbacks, eindeloze 202-antwoorden en herstel van de opgeslagen wachtrij. Cloudflare Free voor twee gebruikers en uitsluitend privégebruik blijven ongewijzigd.
 
 ## 5.2.36 — Herstel zonder vastlopend flipoverzicht
 

@@ -84,7 +84,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.36";
+    private static final String PLUGIN_VERSION = "5.2.37";
+    private static final int MAX_EVENT_CONTINUATIONS = 16;
+    private static final int MAX_SNAPSHOT_CONTINUATIONS = 96;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
     private static final String QUANTITY_EDITOR_PREFIX = "OSRS Flip Tracker - Aanbevolen aantal: ";
     private static final String USER_AGENT = "OSRS-Flipper-RuneLite-Sync/" + PLUGIN_VERSION;
@@ -1819,7 +1821,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         long continuationDelay = statusCode == 202
             ? WorkerResponseValidation.eventContinuationDelaySeconds(responseText, eventId) : 0;
-        if (continuationDelay > 0 && ++queued.continuationAttempts <= 8)
+        if (continuationDelay > 0 && ++queued.continuationAttempts <= MAX_EVENT_CONTINUATIONS)
         {
             // Continue the same durable intent through bounded Worker phases.
             // An endless processing response falls back to the normal failure
@@ -2131,14 +2133,14 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
         long continuationDelay = statusCode == 202 || statusCode == 503
             ? WorkerResponseValidation.snapshotContinuationDelaySeconds(body, snapshotId) : 0;
-        if (continuationDelay > 0 && ++pendingSnapshot.continuationAttempts <= 64)
+        if (continuationDelay > 0 && ++pendingSnapshot.continuationAttempts <= MAX_SNAPSHOT_CONTINUATIONS)
         {
             // Een grote inhaalsnapshot wordt door de Worker bewust in kleine,
             // CPU-veilige delen verwerkt. Dit is voortgang, geen storing: houd
             // hetzelfde durable ID vast en vraag de volgende tranche snel op.
-            // Eight abandoned old receipts plus eight current slots can take
-            // four bounded phases each. Beyond that budget, use the ordinary
-            // failure delay and permit reads while keeping this exact intent.
+            // Eight new purchases currently take 72 bounded requests. Allow
+            // those phases plus recovery headroom; beyond the fixed budget,
+            // use ordinary failure delays and permit reads without losing intent.
             pendingSnapshot.nextAttemptAt = now() + continuationDelay;
             snapshotPending = true;
             persistCurrentAccount();
@@ -3326,11 +3328,26 @@ public class OsrsFlipperSyncPlugin extends Plugin
         state.cycles = flipCycles.persistedCycles();
         state.pendingCash = pendingCashUpdate;
         state.unjournaled = unjournaledEvents.toArray(new SyncEvent[0]);
+        QueuedEvent head = outbox.peekFirst();
+        if (head != null && head.event != null)
+        {
+            state.retryEventId = head.event.eventId;
+            state.eventRetryAttempts = head.attempts;
+            state.eventContinuationAttempts = head.continuationAttempts;
+            state.eventNextAttemptAt = head.nextAttemptAt;
+        }
         return state;
     }
 
     private void restoreAccountState(AccountState state)
     {
+        QueuedEvent head = outbox.peekFirst();
+        if (head != null && head.event != null && Objects.equals(head.event.eventId, state.retryEventId))
+        {
+            head.attempts = Math.max(0, state.eventRetryAttempts);
+            head.continuationAttempts = Math.max(0, state.eventContinuationAttempts);
+            head.nextAttemptAt = Math.max(0, state.eventNextAttemptAt);
+        }
         if (state.slots != null)
         {
             for (SlotSnapshot slot : state.slots)
@@ -5915,6 +5932,10 @@ public class OsrsFlipperSyncPlugin extends Plugin
         FlipCyclePlanBook.Cycle[] cycles;
         PendingCashUpdate pendingCash;
         SyncEvent[] unjournaled;
+        String retryEventId;
+        int eventRetryAttempts;
+        int eventContinuationAttempts;
+        long eventNextAttemptAt;
     }
 
     private static final class PairResponse

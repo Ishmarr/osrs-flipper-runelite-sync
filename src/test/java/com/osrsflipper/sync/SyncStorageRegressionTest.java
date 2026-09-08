@@ -98,6 +98,7 @@ public class SyncStorageRegressionTest
     {
         Path root = temporary.newFolder().toPath();
         String original;
+        long retryDeadline;
         try (Harness first = new Harness(root, defaults(), 42))
         {
             first.enqueue(event("uncertain", 37));
@@ -106,10 +107,16 @@ public class SyncStorageRegressionTest
             original = first.eventCalls().get(0).payload().toString();
             first.eventCalls().get(0).fail();
             first.drain();
+            retryDeadline = (Long) get(first.queue().peekFirst(), "nextAttemptAt");
         }
         try (Harness restarted = new Harness(root, defaults(), 42))
         {
             restarted.enableEventDelivery();
+            assertEquals(retryDeadline, get(restarted.queue().peekFirst(), "nextAttemptAt"));
+            assertEquals(1, get(restarted.queue().peekFirst(), "attempts"));
+            invoke(restarted.plugin, "flushOutboxIfPossible");
+            assertTrue("Restart must preserve the retry pause", restarted.eventCalls().isEmpty());
+            set(restarted.queue().peekFirst(), "nextAttemptAt", 0L);
             invoke(restarted.plugin, "flushOutboxIfPossible");
             assertEquals(original, restarted.eventCalls().get(0).payload().toString());
         }

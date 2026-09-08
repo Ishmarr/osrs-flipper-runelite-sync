@@ -1300,6 +1300,10 @@ public class OverviewListContinuityTest
             invoke(h.plugin, "switchToCurrentAccount");
             h.disableUnrelatedScheduling();
             assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            Object restoredHead = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+            assertTrue("Account reload preserves the failed event's retry deadline",
+                (Long) get(restoredHead, "nextAttemptAt") > Instant.now().getEpochSecond());
+            set(restoredHead, "nextAttemptAt", 0L);
             invoke(h.plugin, "pumpWorkerRequests");
             assertEquals(requestBody(h.calls.get(0)), requestBody(h.calls.get(h.calls.size() - 1)));
         }
@@ -1346,11 +1350,11 @@ public class OverviewListContinuityTest
             String eventId = GSON.fromJson(original, JsonObject.class).getAsJsonObject("event").get("event_id").getAsString();
             String processing = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\",\"event_id\":\"" +
                 eventId + "\",\"retry_after_ms\":250}";
-            for (int phase = 1; phase <= 9; phase++)
+            for (int phase = 1; phase <= 17; phase++)
             {
                 h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
                 h.drain();
-                if (phase > 8)
+                if (phase > 16)
                 {
                     TestCall read = h.workerCalls().get(h.workerCalls().size() - 1);
                     assertTrue("An exhausted continuation budget must let pending reads recover",
@@ -1360,9 +1364,28 @@ public class OverviewListContinuityTest
                 }
                 Object head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
                 assertEquals(1, ((EventJournal) get(h.plugin, "eventJournal")).size());
-                assertEquals(phase > 8, h.health().failed(SyncHealthTracker.Channel.EVENTS));
-                assertEquals(phase > 8 ? 1 : 0, get(head, "attempts"));
+                assertEquals(phase > 16, h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                assertEquals(phase > 16 ? 1 : 0, get(head, "attempts"));
+                JsonObject persisted = GSON.fromJson(((EventJournal) get(h.plugin, "eventJournal")).readState(), JsonObject.class);
+                assertEquals(eventId, persisted.get("retryEventId").getAsString());
+                assertEquals(phase, persisted.get("eventContinuationAttempts").getAsInt());
                 assertTrue((Long) get(head, "nextAttemptAt") > Instant.now().getEpochSecond());
+                if (phase == 17)
+                {
+                    long deadline = (Long) get(head, "nextAttemptAt");
+                    h.accountHash = 99;
+                    invoke(h.plugin, "switchToCurrentAccount");
+                    h.disableUnrelatedScheduling();
+                    assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
+                    h.accountHash = 42;
+                    invoke(h.plugin, "switchToCurrentAccount");
+                    h.disableUnrelatedScheduling();
+                    head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+                    assertEquals(17, get(head, "continuationAttempts"));
+                    assertEquals(1, get(head, "attempts"));
+                    assertEquals(deadline, get(head, "nextAttemptAt"));
+                    set(h.plugin, "overviewTicks", 0);
+                }
                 int count = h.workerCalls().size();
                 h.ticks(10);
                 assertEquals(count, h.workerCalls().size());
@@ -1374,6 +1397,75 @@ public class OverviewListContinuityTest
             h.drain();
             assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
             assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+        }
+    }
+
+    @Test
+    public void tenRequestGeProcessingCompletesWithoutAnArtificialFailureDelay() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            enqueueSale(h, 4);
+            String original = requestBody(h.calls.get(0));
+            String eventId = GSON.fromJson(original, JsonObject.class).getAsJsonObject("event").get("event_id").getAsString();
+            String processing = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\",\"event_id\":\"" +
+                eventId + "\",\"retry_after_ms\":1000}";
+            for (int response = 1; response < 10; response++)
+            {
+                h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
+                h.drain();
+                Object head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+                assertEquals(0, get(head, "attempts"));
+                assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                assertTrue((Long) get(head, "nextAttemptAt") <= Instant.now().getEpochSecond() + 1);
+                set(head, "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                assertEquals(original, requestBody(h.workerCalls().get(h.workerCalls().size() - 1)));
+            }
+            assertEquals(10, h.workerCalls().size());
+            h.workerCalls().get(9).respond(eventAck(eventId, "applied"));
+            h.drain();
+            assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
+            assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+        }
+    }
+
+    @Test
+    public void seventyTwoRequestSnapshotCompletesWithoutAnArtificialFailureDelay() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            for (int slot = 0; slot < 8; slot++) h.liveOffers[slot] = liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY);
+            set(h.plugin, "snapshotPending", true);
+            invoke(h.plugin, "sendFullSnapshotIfPossible");
+            String original = requestBody(h.calls.get(0));
+            JsonObject submitted = GSON.fromJson(original, JsonObject.class);
+            String id = submitted.get("snapshot_id").getAsString();
+            String processing = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\",\"reconcile_required\":false,\"retry_after_ms\":1000}";
+            for (int response = 1; response < 72; response++)
+            {
+                h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
+                h.drain();
+                Object pending = get(h.plugin, "pendingSnapshot");
+                assertEquals(0, get(pending, "attempts"));
+                assertEquals(id, get(pending, "snapshotId"));
+                assertFalse(h.health().failed(SyncHealthTracker.Channel.STATE));
+                assertTrue((Long) get(pending, "nextAttemptAt") <= Instant.now().getEpochSecond() + 1);
+                set(pending, "nextAttemptAt", 0L);
+                invoke(h.plugin, "pumpWorkerRequests");
+                assertEquals(original, requestBody(h.workerCalls().get(h.workerCalls().size() - 1)));
+            }
+            assertEquals(72, h.workerCalls().size());
+            JsonObject complete = new JsonObject();
+            complete.addProperty("success", true);
+            complete.addProperty("reconcile_required", false);
+            complete.add("data", submitted.getAsJsonArray("slots"));
+            h.workerCalls().get(71).respond(GSON.toJson(complete));
+            h.drain();
+            assertNull(get(h.plugin, "pendingSnapshot"));
+            assertFalse(h.health().failed(SyncHealthTracker.Channel.STATE));
         }
     }
 
@@ -1503,7 +1595,7 @@ public class OverviewListContinuityTest
             String processing = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\"," +
                 "\"reconcile_required\":false,\"retry_after_ms\":1000,\"snapshot_id\":\"" + id + "\"}";
             invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
-            for (int phase = 1; phase <= 65; phase++)
+            for (int phase = 1; phase <= 97; phase++)
             {
                 TestCall call = h.workerCalls().get(h.workerCalls().size() - 1);
                 call.respond(phase % 2 == 0 ? 503 : 202, processing);
@@ -1514,13 +1606,13 @@ public class OverviewListContinuityTest
                 JsonObject persisted = GSON.fromJson(((EventJournal) get(h.plugin, "eventJournal")).readState(), JsonObject.class);
                 assertEquals("A restart must not reset an exhausted continuation budget", phase,
                     persisted.getAsJsonObject("pendingSnapshot").get("continuationAttempts").getAsInt());
-                assertEquals(phase > 64, h.health().failed(SyncHealthTracker.Channel.STATE));
+                assertEquals(phase > 96, h.health().failed(SyncHealthTracker.Channel.STATE));
                 if (phase == 2)
                 {
                     enqueueSale(h, 10);
                     invoke(h.plugin, "setAccountCash", new Class<?>[]{long.class}, 8000L);
                 }
-                if (phase > 64)
+                if (phase > 96)
                 {
                     assertEquals(1, h.overviewCalls().size());
                     h.overviewCalls().get(0).respond(payload(TOP_IDS, 0, NOW, false, true, 2000));
