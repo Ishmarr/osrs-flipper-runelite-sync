@@ -84,7 +84,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private static final Logger LOG = LoggerFactory.getLogger(OsrsFlipperSyncPlugin.class);
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-    private static final String PLUGIN_VERSION = "5.2.41";
+    private static final String PLUGIN_VERSION = "5.2.42";
     private static final int MAX_EVENT_CONTINUATIONS = 16;
     private static final int MAX_SNAPSHOT_CONTINUATIONS = 8 * 32;
     private static final String PRICE_EDITOR_PREFIX = "OSRS Flip Tracker - ";
@@ -214,6 +214,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
     private boolean manualSyncPending;
     private boolean loginReconciliationPending;
     private boolean loginIdentityReady;
+    private List<ServerSlotState> loginServerState;
+    private long loginStateGeneration;
     private boolean geOpenReconciliationPending;
     private int loggedInTicks;
     private int geOpenTicks;
@@ -505,6 +507,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (state == GameState.LOGGED_IN)
         {
             switchToCurrentAccount();
+            invalidateLoginServerState();
             loginReconciliationPending = true;
             loginIdentityReady = false;
             loggedInTicks = 0;
@@ -525,6 +528,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             state == GameState.LOGIN_SCREEN)
         {
             persistCurrentAccount();
+            invalidateLoginServerState();
             loginReconciliationPending = true;
             loginIdentityReady = false;
             loggedInTicks = 0;
@@ -545,22 +549,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
         if (loginReconciliationPending)
         {
             loggedInTicks++;
-            if (loggedInTicks >= LOGIN_RECONCILE_TICKS)
+            completeLoginReconciliationIfReady();
+            if (!loginIdentityReady && loginServerState == null)
             {
-                if (!loginIdentityReady)
-                {
-                    serverStateCheckPending = true;
-                    checkServerSlotStateIfPossible();
-                }
-                else if (reconcileAllSlots(
-                    "login",
-                    SnapshotSyncPolicy.ReconcileMode.ALWAYS))
-                {
-                    loginReconciliationPending = false;
-                    loggedInTicks = 0;
-                    flushOutboxIfPossible();
-                    checkServerSlotStateIfPossible();
-                }
+                serverStateCheckPending = true;
+                checkServerSlotStateIfPossible();
             }
             if (loginReconciliationPending)
             {
@@ -748,6 +741,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             String key = event.getKey();
             dispatchToClientThread(() ->
             {
+                invalidateLoginServerState();
                 if ("deviceToken".equals(key))
                 {
                     // Imported/old configuration must never reactivate an unbound token.
@@ -1825,10 +1819,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
             ? WorkerResponseValidation.eventContinuationDelaySeconds(responseText, eventId) : 0;
         if (continuationDelay > 0 && ++queued.continuationAttempts <= MAX_EVENT_CONTINUATIONS)
         {
-            // Continue the same durable intent through bounded Worker phases.
-            // An endless processing response falls back to the normal failure
-            // backoff below; it cannot poll once per second forever.
-            queued.nextAttemptAt = now() + continuationDelay;
+            // A confirmed ready checkpoint needs no idle timer. Keep separate
+            // authenticated requests and the same durable intent; the existing
+            // continuation cap still sends endless progress into backoff.
+            queued.nextAttemptAt = now() + (WorkerResponseValidation.eventContinuationReady(
+                statusCode, responseText, eventId) ? 0 : continuationDelay);
             persistCurrentAccount();
             return;
         }
@@ -2143,7 +2138,8 @@ public class OsrsFlipperSyncPlugin extends Plugin
             // Eight abandoned purchases followed by eight replacement offers
             // currently take 192 requests. Eight slots times 32 allows margin;
             // beyond that fixed budget, ordinary backoff still permits reads.
-            pendingSnapshot.nextAttemptAt = now() + continuationDelay;
+            pendingSnapshot.nextAttemptAt = now() + (WorkerResponseValidation.snapshotContinuationReady(
+                statusCode, body, snapshotId) ? 0 : continuationDelay);
             snapshotPending = true;
             persistCurrentAccount();
             debug("Worker verwerkt slotsnapshot {} verder", snapshotId);
@@ -2221,8 +2217,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void checkServerSlotStateIfPossible()
     {
-        boolean loginBootstrap = loginReconciliationPending && !loginIdentityReady &&
-            loggedInTicks >= LOGIN_RECONCILE_TICKS && hasCompleteRuneLiteSlotArray(client.getGrandExchangeOffers());
+        // Fetch identities while RuneLite fills its initial slot array. Applying
+        // them still waits for the complete array and the existing login grace.
+        boolean loginBootstrap = loginReconciliationPending && !loginIdentityReady && loginServerState == null;
         if (!serverStateCheckPending || slotStateInFlight || anyWorkerRequestInFlight() ||
             (loginReconciliationPending && !loginBootstrap) ||
             hasQueuedEvents() || pendingSnapshot != null || (snapshotPending && !loginBootstrap) || !hasDeviceToken() ||
@@ -2251,6 +2248,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         }
         slotStateInFlight = true;
         serverStateCheckPending = false;
+        long requestLoginGeneration = loginStateGeneration;
         workerCall.enqueue(new Callback()
         {
             @Override
@@ -2261,6 +2259,11 @@ public class OsrsFlipperSyncPlugin extends Plugin
                     call,
                     () -> {
                     slotStateInFlight = false;
+                    if (requestLoginGeneration != loginStateGeneration)
+                    {
+                        serverStateCheckPending = true;
+                        return;
+                    }
                     serverStateCheckPending = true;
                     serverStateNextAttemptAt = scheduleTransientRetry(++serverStateRetryAttempts);
                     if (manualSyncPending)
@@ -2282,7 +2285,15 @@ public class OsrsFlipperSyncPlugin extends Plugin
                 clientThread.invokeLater(() -> finishWorkerRequest(
                     WorkerRequestCoordinator.Kind.STATE,
                     call,
-                    () -> handleServerStateResponse(statusCode, body)));
+                    () -> {
+                        if (requestLoginGeneration != loginStateGeneration)
+                        {
+                            slotStateInFlight = false;
+                            serverStateCheckPending = true;
+                            return;
+                        }
+                        handleServerStateResponse(statusCode, body);
+                    }));
             }
         });
     }
@@ -2311,13 +2322,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
             serverStateNextAttemptAt = 0;
             if (loginReconciliationPending && !loginIdentityReady)
             {
-                if (!adoptLoginOfferIdentities(response.data))
-                {
-                    serverStateCheckPending = true;
-                    return;
-                }
-                loginIdentityReady = true;
+                loginServerState = response.data;
                 serverStateCheckPending = false;
+                completeLoginReconciliationIfReady();
                 return;
             }
             reconcileWithServerState(response.data);
@@ -2375,6 +2382,32 @@ public class OsrsFlipperSyncPlugin extends Plugin
             healthSuccess(SyncHealthTracker.Channel.EVENTS);
         }
         debug("Lokale GE-slots en serverversies zijn gelijk");
+    }
+
+    private void invalidateLoginServerState()
+    {
+        loginServerState = null;
+        ++loginStateGeneration;
+    }
+
+    private void completeLoginReconciliationIfReady()
+    {
+        if (!loginReconciliationPending || client.getGameState() != GameState.LOGGED_IN ||
+            loggedInTicks < LOGIN_RECONCILE_TICKS) return;
+        if (!loginIdentityReady)
+        {
+            if (loginServerState == null || !adoptLoginOfferIdentities(loginServerState)) return;
+            loginIdentityReady = true;
+            loginServerState = null;
+            serverStateCheckPending = false;
+        }
+        if (reconcileAllSlots("login", SnapshotSyncPolicy.ReconcileMode.ALWAYS))
+        {
+            loginReconciliationPending = false;
+            loggedInTicks = 0;
+            flushOutboxIfPossible();
+            checkServerSlotStateIfPossible();
+        }
     }
 
     private boolean adoptLoginOfferIdentities(List<ServerSlotState> serverRows)
@@ -2798,18 +2831,23 @@ public class OsrsFlipperSyncPlugin extends Plugin
         workerPumpActive = true;
         try
         {
-            if (loginReconciliationPending && !loginIdentityReady &&
-                pendingSnapshot == null && !hasQueuedEvents() && !priorityRequestWaitingForRetry())
-            {
-                checkServerSlotStateIfPossible();
-                return;
-            }
             boolean fullOverviewDue = (overviewRefreshPending ||
                 syncHealth.failed(SyncHealthTracker.Channel.OVERVIEW)) &&
                 now() >= syncHealth.retryAt(SyncHealthTracker.Channel.OVERVIEW);
             boolean focusOverviewDue = pendingFocusedOverviewItemId > 0 &&
                 pendingFocusedOverviewItemId == focusedGeItemId &&
                 now() >= syncHealth.retryAt(SyncHealthTracker.Channel.FOCUS);
+            if (loginReconciliationPending && !loginIdentityReady &&
+                pendingSnapshot == null && !hasQueuedEvents() && !priorityRequestWaitingForRetry())
+            {
+                checkServerSlotStateIfPossible();
+                if (!workerRequests.isActive())
+                {
+                    if (fullOverviewDue) requestOverview(false);
+                    else if (focusOverviewDue) requestFocusedOverview(pendingFocusedOverviewItemId);
+                }
+                return;
+            }
             if (priorityRequestWaitingForRetry())
             {
                 // The earlier financial intent still owns the write queue. A
@@ -3581,6 +3619,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private void invalidateOverviewContext()
     {
+        invalidateLoginServerState();
         workerRequests.cancelActive(WorkerRequestCoordinator.Cancellation.CONTEXT_CHANGED);
         syncHealth.clear();
         updateHealthPanel();

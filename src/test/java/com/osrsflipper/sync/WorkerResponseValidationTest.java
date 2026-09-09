@@ -7,6 +7,51 @@ import static org.junit.Assert.assertTrue;
 
 public class WorkerResponseValidationTest
 {
+    private static final String READY = "{\"success\":false,\"retryable\":true," +
+        "\"reconcile_required\":false,\"continuation_ready\":true,\"retry_after_ms\":1000," +
+        "\"code\":\"event_processing\",\"event_id\":\"same-event\"}";
+
+    @Test
+    public void fastContinuationRequiresAnExactReadyAcknowledgementAndTheSameIdentity()
+    {
+        assertTrue(WorkerResponseValidation.eventContinuationReady(202, READY, "same-event"));
+        assertFalse(WorkerResponseValidation.eventContinuationReady(202, READY, "other-event"));
+        String snapshot = READY.replace("event_processing", "snapshot_processing")
+            .replace("event_id", "snapshot_id");
+        assertTrue(WorkerResponseValidation.snapshotContinuationReady(202, snapshot, "same-event"));
+        assertFalse(WorkerResponseValidation.snapshotContinuationReady(202, snapshot, "other-event"));
+        String nested = snapshot.replace("\"snapshot_id\":\"same-event\"", "\"snapshot\":{\"snapshot_id\":\"same-event\"}");
+        assertTrue(WorkerResponseValidation.snapshotContinuationReady(202, nested, "same-event"));
+        assertFalse(WorkerResponseValidation.snapshotContinuationReady(202,
+            nested.replace("\"code\"", "\"snapshot_id\":\"other-event\",\"code\""), "same-event"));
+        assertFalse(WorkerResponseValidation.snapshotContinuationReady(202,
+            snapshot.replace(",\"snapshot_id\":\"same-event\"", ""), "same-event"));
+        for (int status : new int[]{200, 400, 401, 403, 409, 413, 429, 500, 503})
+        {
+            assertFalse(WorkerResponseValidation.eventContinuationReady(status, READY, "same-event"));
+            assertFalse(WorkerResponseValidation.snapshotContinuationReady(status, snapshot, "same-event"));
+        }
+    }
+
+    @Test
+    public void malformedOrLegacyProgressCannotEnterAnImmediateRetryLoop()
+    {
+        for (String body : new String[]{"{}", "[]", "invalid", READY.replace("true", "\"true\""),
+            READY.replace(",\"continuation_ready\":true", ""),
+            READY.replace("\"continuation_ready\":true", "\"continuation_ready\":false"),
+            READY.replace("\"reconcile_required\":false", "\"reconcile_required\":true"),
+            READY.replace("\"reconcile_required\":false,", ""),
+            READY.replace("\"success\":false", "\"success\":true"),
+            READY.replace("\"retry_after_ms\":1000", "\"retry_after_ms\":\"1000\""),
+            READY.replace("1000", "0"), READY.replace("1000", "30001"),
+            READY.replace("\"retry_after_ms\":1000,", "")})
+        {
+            assertFalse(body, WorkerResponseValidation.eventContinuationReady(202, body, "same-event"));
+            assertFalse(body, WorkerResponseValidation.snapshotContinuationReady(202,
+                body.replace("event_processing", "snapshot_processing").replace("event_id", "snapshot_id"), "same-event"));
+        }
+    }
+
     private static final String DEVICE = "fixture-device";
     private static final String OWNER = "owner@example.test";
     private static final String CASH = "{\"success\":true,\"cash\":{\"available\":1000," +

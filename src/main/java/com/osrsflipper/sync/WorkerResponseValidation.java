@@ -51,6 +51,38 @@ final class WorkerResponseValidation
         catch (RuntimeException exception) { return 0; }
     }
 
+    static boolean eventContinuationReady(int statusCode, String body, String eventId)
+    {
+        if (statusCode != 202 || eventContinuationDelaySeconds(body, eventId) <= 0) return false;
+        return continuationReady(body);
+    }
+
+    static boolean snapshotContinuationReady(int statusCode, String body, String snapshotId)
+    {
+        if (statusCode != 202 || snapshotId == null || snapshotId.isEmpty() ||
+            snapshotContinuationDelaySeconds(body, snapshotId) <= 0 || !continuationReady(body)) return false;
+        try
+        {
+            JsonObject root = new JsonParser().parse(body).getAsJsonObject();
+            // Fast progress must explicitly echo this durable intent. Legacy
+            // responses without an identity retain their ordinary retry delay.
+            return root.has("snapshot_id") && snapshotId.equals(string(root, "snapshot_id")) ||
+                root.has("snapshot") && snapshotId.equals(string(root.getAsJsonObject("snapshot"), "snapshot_id"));
+        }
+        catch (RuntimeException exception) { return false; }
+    }
+
+    private static boolean continuationReady(String body)
+    {
+        try
+        {
+            JsonObject root = new JsonParser().parse(body).getAsJsonObject();
+            return bool(root, "continuation_ready") && explicitFalse(root, "reconcile_required") &&
+                root.has("retry_after_ms") && integer(root, "retry_after_ms") > 0;
+        }
+        catch (RuntimeException exception) { return false; }
+    }
+
     static boolean cash(String body)
     {
         return cashBalance(body) != null;

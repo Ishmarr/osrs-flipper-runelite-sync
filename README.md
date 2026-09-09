@@ -1,6 +1,13 @@
-# OSRS Flipper Sync v5.2.41
+# OSRS Flipper Sync v5.2.42
 
 RuneLite-plugin voor de veilige koppeling tussen RuneLite en de OSRS Flip Tracker-webapp.
+
+## 5.2.42 — Sneller synchroniseren na aanmelden
+
+- De eerste accountcontrole loopt alvast tijdens de bestaande acht gameticks waarin RuneLite zijn GE-slots laadt. De plugin verwerkt het antwoord pas wanneer die wachttijd voorbij is en alle acht slots beschikbaar zijn. Oude antwoorden vervallen bij uitloggen, wereld- of accountwissel en wijzigingen aan de koppeling.
+- Worker 99.0.9 kan bevestigen dat de volgende duurzame GE-stap klaarstaat. De plugin gaat dan vanuit de antwoordcallback direct verder met precies dezelfde aanvraag, zonder een extra seconde of gametick te wachten. Iedere stap behoudt zijn eigen authenticatie, financiële ontvangstbewijs en databasebudget op Cloudflare Free.
+- Oude servers en antwoorden zonder expliciete bevestiging behouden hun wachttijd. Fouten, conflicten, HTTP 429/503 en onjuiste identiteiten krijgen geen directe retry. De bestaande grenzen van 16 eventvervolgen en 256 snapshotvervolgen blijven gelden, inclusief herstel en leesverzoeken tijdens backoff.
+- Regressies controleren de echte aanmeldroute, standaard lege slots die later gevuld worden, vertraagde antwoorden, accountwissels, 192 opeenvolgende snapshotaanvragen zonder klokmanipulatie en het stoppen van eindeloze voortgang. De volledige suite blijft geïsoleerd van het echte RuneLite-profiel.
 
 ## 5.2.41 — Top flipwaarde volgt de actuele uitvoerbaarheid
 

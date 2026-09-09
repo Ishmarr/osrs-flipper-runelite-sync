@@ -903,8 +903,9 @@ public class OverviewListContinuityTest
                 Object recovered = ((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1);
                 assertEquals("server-offer", get(recovered, "offerId"));
                 assertEquals(NOW - 86400, get(recovered, "startedAt"));
-                assertEquals(4, get(recovered, "filledQuantity"));
-                h.ticks(1);
+                assertEquals(filled, get(recovered, "filledQuantity"));
+                assertFalse("A late identity reply completes login without another game tick",
+                    (Boolean) get(h.plugin, "loginReconciliationPending"));
                 List<TestCall> events = h.calls.stream().filter(call -> call.request.url().encodedPath().endsWith("/ge-slots/sync"))
                     .collect(Collectors.toList());
                 assertEquals(filled == 4 ? 0 : 1, events.size());
@@ -940,8 +941,132 @@ public class OverviewListContinuityTest
                 h.calls.get(0).respond(loginServerState("unrelated-server-offer", 4,
                     Integer.parseInt(scenario[0]), scenario[1]));
                 h.drain();
-                assertNull(((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1));
+                Object local = ((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1);
+                assertNotNull(local);
+                assertNotEquals("unrelated-server-offer", get(local, "offerId"));
             }
+        }
+    }
+
+    @Test
+    public void loginPrefetchWaitsForEightTicksBeforeReconcilingInitiallyEmptySlots() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            Arrays.fill(h.liveOffers, liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY));
+            set(h.plugin, "loginReconciliationPending", true);
+            set(h.plugin, "snapshotPending", true);
+            h.ticks(1);
+            assertEquals(1, h.workerCalls().size());
+            TestCall state = h.workerCalls().get(0);
+            assertTrue(state.request.url().encodedPath().endsWith("/ge-slots/state"));
+            assertEquals("GET", state.request.method());
+            state.respond(loginServerState("server-offer", 4, 1200, "partially_filled"));
+            h.drain();
+            assertNotNull(get(h.plugin, "loginServerState"));
+            assertFalse((Boolean) get(h.plugin, "loginIdentityReady"));
+            assertTrue(((Map<?, ?>) get(h.plugin, "slotSnapshots")).isEmpty());
+            h.ticks(6);
+            assertEquals("Cached identities neither re-fetch nor submit the placeholder empty array", 1, h.workerCalls().size());
+            h.liveOffers[0] = liveOffer(4151, 1200, 10, 6, GrandExchangeOfferState.SELLING);
+            h.ticks(1);
+            assertFalse((Boolean) get(h.plugin, "loginReconciliationPending"));
+            assertNull(get(h.plugin, "loginServerState"));
+            assertEquals(1, h.workerCalls().stream().filter(call -> call.request.method().equals("GET")).count());
+            TestCall firstWrite = h.workerCalls().get(1);
+            assertTrue(firstWrite.request.url().encodedPath().endsWith("/ge-slots/sync"));
+            Buffer buffer = new Buffer();
+            firstWrite.request.body().writeTo(buffer);
+            JsonObject event = GSON.fromJson(buffer.readUtf8(), JsonObject.class).getAsJsonObject("event");
+            assertEquals("server-offer", event.get("runelite_offer_id").getAsString());
+            assertEquals(7200, event.get("spent_amount").getAsInt());
+            assertEquals(3, event.get("event_sequence").getAsInt());
+        }
+    }
+
+    @Test
+    public void loginPrefetchKeepsOneReadUntilRuneLiteSuppliesAllEightSlots() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            set(h.plugin, "loginReconciliationPending", true);
+            set(h.plugin, "snapshotPending", true);
+            h.ticks(1);
+            h.workerCalls().get(0).respond(loginServerState("server-offer", 4, 1200, "partially_filled"));
+            h.drain();
+            h.ticks(12);
+            assertEquals("An incomplete client array cannot create writes or repeated state reads", 1, h.workerCalls().size());
+            assertFalse((Boolean) get(h.plugin, "loginIdentityReady"));
+            Arrays.fill(h.liveOffers, liveOffer(0, 0, 0, 0, GrandExchangeOfferState.EMPTY));
+            h.liveOffers[0] = liveOffer(4151, 1200, 10, 4, GrandExchangeOfferState.SELLING);
+            h.ticks(1);
+            assertFalse((Boolean) get(h.plugin, "loginReconciliationPending"));
+            assertEquals("server-offer", get(((Map<?, ?>) get(h.plugin, "slotSnapshots")).get(1), "offerId"));
+            assertEquals(2, h.workerCalls().size());
+            assertTrue(h.workerCalls().get(1).request.url().encodedPath().endsWith("/ge-slots/snapshot"));
+        }
+    }
+
+    @Test
+    public void cachedLoginIdentitiesAreDiscardedOnHopLogoutAndAccountChange() throws Exception
+    {
+        for (GameState state : new GameState[]{GameState.HOPPING, GameState.LOGIN_SCREEN, GameState.CONNECTION_LOST})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                set(h.plugin, "loginReconciliationPending", true);
+                h.ticks(1);
+                h.workerCalls().get(0).respond(loginServerState("old-session-offer", 4, 1200, "partially_filled"));
+                h.drain();
+                assertNotNull(get(h.plugin, "loginServerState"));
+                h.gameState = state;
+                GameStateChanged changed = new GameStateChanged();
+                changed.setGameState(state);
+                h.plugin.onGameStateChanged(changed);
+                assertNull(get(h.plugin, "loginServerState"));
+                assertFalse((Boolean) get(h.plugin, "loginIdentityReady"));
+            }
+        }
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            set(h.plugin, "loginReconciliationPending", true);
+            h.ticks(1);
+            h.workerCalls().get(0).respond(loginServerState("old-account-offer", 4, 1200, "partially_filled"));
+            h.drain();
+            h.accountHash++;
+            invoke(h.plugin, "switchToCurrentAccount");
+            assertNull(get(h.plugin, "loginServerState"));
+            assertFalse((Boolean) get(h.plugin, "loginIdentityReady"));
+        }
+    }
+
+    @Test
+    public void delayedLoginStateReplyCannotCrossSameAccountRelogin() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            set(h.plugin, "loginReconciliationPending", true);
+            h.ticks(1);
+            TestCall oldRead = h.workerCalls().get(0);
+            h.gameState = GameState.HOPPING;
+            GameStateChanged changed = new GameStateChanged();
+            changed.setGameState(h.gameState);
+            h.plugin.onGameStateChanged(changed);
+            h.gameState = GameState.LOGGED_IN;
+            changed.setGameState(h.gameState);
+            h.plugin.onGameStateChanged(changed);
+            oldRead.respond(loginServerState("old-session-offer", 4, 1200, "partially_filled"));
+            h.drain();
+            assertNull("An old reply is not cached for the next login", get(h.plugin, "loginServerState"));
+            assertFalse((Boolean) get(h.plugin, "loginIdentityReady"));
+            assertTrue(((Map<?, ?>) get(h.plugin, "slotSnapshots")).isEmpty());
+            assertEquals("A fresh login gets one fresh identity read", 2, h.workerCalls().size());
+            assertTrue(h.workerCalls().get(1).request.url().encodedPath().endsWith("/ge-slots/state"));
         }
     }
 
@@ -1965,6 +2090,101 @@ public class OverviewListContinuityTest
     }
 
     @Test
+    public void readyEventCallbacksContinueWithoutTicksButStillStopAtTheRetryBudget() throws Exception
+    {
+        for (boolean endless : new boolean[]{false, true})
+        {
+            try (Harness h = harness())
+            {
+                h.enableGameTicks();
+                enqueueSale(h, 4);
+                String original = requestBody(h.workerCalls().get(0));
+                String id = GSON.fromJson(original, JsonObject.class).getAsJsonObject("event").get("event_id").getAsString();
+                String ready = "{\"success\":false,\"retryable\":true,\"code\":\"event_processing\"," +
+                    "\"event_id\":\"" + id + "\",\"retry_after_ms\":1000,\"reconcile_required\":false,\"continuation_ready\":true}";
+                int responses = endless ? 17 : 9;
+                for (int phase = 1; phase <= responses; phase++)
+                {
+                    TestCall call = h.workerCalls().get(phase - 1);
+                    assertEquals(original, requestBody(call));
+                    call.respond(202, ready);
+                    h.drain();
+                    assertEquals("A progress response never acknowledges the event", 1,
+                        ((EventJournal) get(h.plugin, "eventJournal")).size());
+                    if (phase <= 16)
+                    {
+                        assertEquals("The callback itself dispatches the next phase, without a tick or clock change",
+                            phase + 1, h.workerCalls().size());
+                        assertEquals(original, requestBody(h.workerCalls().get(phase)));
+                    }
+                }
+                if (endless)
+                {
+                    Object head = ((Deque<?>) get(h.plugin, "outbox")).peekFirst();
+                    assertEquals(17, get(head, "continuationAttempts"));
+                    assertEquals(1, get(head, "attempts"));
+                    assertTrue((Long) get(head, "nextAttemptAt") > Instant.now().getEpochSecond());
+                    assertTrue(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                    assertEquals(17, h.workerCalls().stream()
+                        .filter(call -> call.request.url().encodedPath().endsWith("/ge-slots/sync")).count());
+                }
+                else
+                {
+                    h.workerCalls().get(9).respond(eventAck(id, "applied"));
+                    h.drain();
+                    assertEquals(0, ((EventJournal) get(h.plugin, "eventJournal")).size());
+                    assertFalse(h.health().failed(SyncHealthTracker.Channel.EVENTS));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void readySnapshotsFinishWithoutAnyPerPhaseClockOrGameTickAdvance() throws Exception
+    {
+        assertSnapshotCompletesWithoutFailureDelay(2, true);
+        assertSnapshotCompletesWithoutFailureDelay(192, true);
+    }
+
+    @Test
+    public void anEndlessReadySnapshotStillPersistsItsBudgetAndAllowsReadsInBackoff() throws Exception
+    {
+        try (Harness h = harness())
+        {
+            h.enableGameTicks();
+            set(h.plugin, "snapshotPending", true);
+            invoke(h.plugin, "sendFullSnapshotIfPossible");
+            String original = requestBody(h.workerCalls().get(0));
+            String id = GSON.fromJson(original, JsonObject.class).get("snapshot_id").getAsString();
+            String ready = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\"," +
+                "\"snapshot_id\":\"" + id + "\",\"retry_after_ms\":1000,\"reconcile_required\":false,\"continuation_ready\":true}";
+            invoke(h.plugin, "requestOverview", new Class<?>[]{boolean.class}, false);
+            for (int phase = 1; phase <= 257; phase++)
+            {
+                TestCall call = h.workerCalls().get(phase - 1);
+                assertEquals(original, requestBody(call));
+                call.respond(202, ready);
+                h.drain();
+                assertNotNull(get(h.plugin, "pendingSnapshot"));
+                assertEquals(phase, get(get(h.plugin, "pendingSnapshot"), "continuationAttempts"));
+                if (phase <= 256) assertEquals(phase + 1, h.workerCalls().size());
+            }
+            Object pending = get(h.plugin, "pendingSnapshot");
+            assertEquals(1, get(pending, "attempts"));
+            assertTrue((Long) get(pending, "nextAttemptAt") > Instant.now().getEpochSecond());
+            assertTrue(h.health().failed(SyncHealthTracker.Channel.STATE));
+            JsonObject saved = GSON.fromJson(((EventJournal) get(h.plugin, "eventJournal")).readState(), JsonObject.class);
+            assertEquals(257, saved.getAsJsonObject("pendingSnapshot").get("continuationAttempts").getAsInt());
+            assertEquals(1, h.overviewCalls().size());
+            h.overviewCalls().get(0).respond(payload(TOP_IDS, 0, NOW, false, true, 1_000_000));
+            h.drain();
+            assertEquals(TOP_IDS, h.ids());
+            assertEquals(257, h.workerCalls().stream()
+                .filter(call -> call.request.url().encodedPath().endsWith("/ge-slots/snapshot")).count());
+        }
+    }
+
+    @Test
     public void seventyTwoRequestSnapshotCompletesWithoutAnArtificialFailureDelay() throws Exception
     {
         assertSnapshotCompletesWithoutFailureDelay(72);
@@ -1978,6 +2198,11 @@ public class OverviewListContinuityTest
 
     private void assertSnapshotCompletesWithoutFailureDelay(int requestCount) throws Exception
     {
+        assertSnapshotCompletesWithoutFailureDelay(requestCount, false);
+    }
+
+    private void assertSnapshotCompletesWithoutFailureDelay(int requestCount, boolean ready) throws Exception
+    {
         try (Harness h = harness())
         {
             h.enableGameTicks();
@@ -1988,6 +2213,7 @@ public class OverviewListContinuityTest
             JsonObject submitted = GSON.fromJson(original, JsonObject.class);
             String id = submitted.get("snapshot_id").getAsString();
             String processing = "{\"success\":false,\"retryable\":true,\"code\":\"snapshot_processing\",\"reconcile_required\":false,\"retry_after_ms\":1000}";
+            if (ready) processing = processing.replace("}", ",\"continuation_ready\":true,\"snapshot_id\":\"" + id + "\"}");
             for (int response = 1; response < requestCount; response++)
             {
                 h.workerCalls().get(h.workerCalls().size() - 1).respond(202, processing);
@@ -1997,8 +2223,12 @@ public class OverviewListContinuityTest
                 assertEquals(id, get(pending, "snapshotId"));
                 assertFalse(h.health().failed(SyncHealthTracker.Channel.STATE));
                 assertTrue((Long) get(pending, "nextAttemptAt") <= Instant.now().getEpochSecond() + 1);
-                set(pending, "nextAttemptAt", 0L);
-                invoke(h.plugin, "pumpWorkerRequests");
+                if (!ready)
+                {
+                    set(pending, "nextAttemptAt", 0L);
+                    invoke(h.plugin, "pumpWorkerRequests");
+                }
+                assertEquals(response + 1, h.workerCalls().size());
                 assertEquals(original, requestBody(h.workerCalls().get(h.workerCalls().size() - 1)));
             }
             assertEquals(requestCount, h.workerCalls().size());
