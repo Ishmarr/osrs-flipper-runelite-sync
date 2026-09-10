@@ -23,9 +23,13 @@ import java.util.EnumSet;
 final class PairingCredentialStore
 {
     private final Path root;
-    private final Gson gson = new Gson();
+    private final Gson gson;
 
-    PairingCredentialStore(Path root) { this.root = root; }
+    PairingCredentialStore(Path root, Gson gson)
+    {
+        this.root = root;
+        this.gson = gson;
+    }
 
     PairingCredentials read(String profile) throws IOException
     {
@@ -67,10 +71,16 @@ final class PairingCredentialStore
             }
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         }
-        finally { Files.deleteIfExists(temporary); }
+        finally
+        {
+            Files.deleteIfExists(temporary);
+        }
     }
 
-    void delete(String profile) throws IOException { Files.deleteIfExists(file(profile)); }
+    void delete(String profile) throws IOException
+    {
+        Files.deleteIfExists(file(profile));
+    }
 
     private Path file(String profile)
     {

@@ -179,10 +179,10 @@ public class SyncStorageRegressionTest
             assertNull(get(harness.plugin, "pendingCashUpdate"));
             assertNull(get(harness.plugin, "pendingSnapshot"));
             assertEquals(0, cycles.size());
-            assertEquals(1, new EventJournal(root, oldContext).size());
+            assertEquals(1, new EventJournal(root, oldContext, GSON).size());
             oldCall.respond(200, complete("alice-history"));
             harness.drain();
-            assertEquals(1, new EventJournal(root, oldContext).size());
+            assertEquals(1, new EventJournal(root, oldContext, GSON).size());
             for (TestCall call : harness.eventCalls())
             {
                 assertEquals("Bearer " + TOKEN_A, call.request.header("Authorization"));

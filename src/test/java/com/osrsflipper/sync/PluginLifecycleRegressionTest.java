@@ -43,7 +43,7 @@ public class PluginLifecycleRegressionTest
         Harness harness = new Harness();
         Path root = temporary.newFolder().toPath();
         SyncStorageContext context = SyncStorageContext.capture(new OsrsFlipperSyncConfig() {}, 42L);
-        EventJournal journal = new EventJournal(root, context.accountKey);
+        EventJournal journal = new EventJournal(root, context.accountKey, new Gson());
         PendingCashUpdate cash = PendingCashUpdate.create(12345);
         set(harness.plugin, "eventJournal", journal);
         set(harness.plugin, "activeStorageContext", context);

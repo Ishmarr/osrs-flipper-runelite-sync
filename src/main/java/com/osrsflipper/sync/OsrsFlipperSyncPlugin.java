@@ -3204,7 +3204,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
         try
         {
             legacyConnectionKey = EventJournal.claimLegacyConnection(
-                journalRoot(), profileKey, proposedLegacyConnectionKey);
+                journalRoot(), profileKey, proposedLegacyConnectionKey, gson);
         }
         catch (IOException exception)
         {
@@ -3227,7 +3227,7 @@ public class OsrsFlipperSyncPlugin extends Plugin
             {
                 throw new IOException("Legacy storage identity has not been bound");
             }
-            eventJournal = new EventJournal(journalRoot(), activeStorageContext.accountKey);
+            eventJournal = new EventJournal(journalRoot(), activeStorageContext.accountKey, gson);
             AccountState legacy = null;
             List<EventJournal.Entry> legacyEvents = new ArrayList<>();
             if (!eventJournal.legacyImported(activeConfigProfileKey) && activeAccountHash != NO_ACCOUNT &&
@@ -5256,7 +5256,9 @@ public class OsrsFlipperSyncPlugin extends Plugin
 
     private PairingCredentialStore credentialStore()
     {
-        return new PairingCredentialStore(journalRoot().resolve("credentials"));
+        return new PairingCredentialStore(
+            journalRoot().resolve("credentials"),
+            gson);
     }
 
     private void initializeCredentials()
